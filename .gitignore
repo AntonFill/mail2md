@@ -1,0 +1,10 @@
+.build/
+.DS_Store
+.swiftpm/
+xcuserdata/
+
+# Planning files live in the vault (_PROJECTS/APP mail2md/), never in the repo
+TASKS.md
+SPEC.md
+ROADMAP.md
+CLAUDE.md
