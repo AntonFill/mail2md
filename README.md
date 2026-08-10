@@ -64,7 +64,15 @@ All messages, including `--verbose` progress, go to stderr. The product is the M
 
 JSON/text output and stdin/stdout piping are on the roadmap.
 
-## Build & Install
+## Install
+
+```sh
+brew install antonfill/tap/mail2md
+```
+
+The formula builds from source, so Xcode 26.4 or newer has to be installed.
+
+### From source
 
 ```sh
 make build     # release build
@@ -72,7 +80,7 @@ make install   # installs to /usr/local/bin
 swift test     # run the test suite
 ```
 
-Requires Swift 6 / macOS 13+.
+Builds with Swift 6.3 (Xcode 26.4), runs on macOS 13+.
 
 ## Contributing
 
