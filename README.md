@@ -70,7 +70,7 @@ JSON/text output and stdin/stdout piping are on the roadmap.
 brew install antonfill/tap/mail2md
 ```
 
-The formula builds from source, so Xcode 26.4 or newer has to be installed.
+The formula builds from source, so Xcode 16 or newer has to be installed.
 
 ### From source
 
@@ -80,7 +80,7 @@ make install   # installs to /usr/local/bin
 swift test     # run the test suite
 ```
 
-Builds with Swift 6.3 (Xcode 26.4), runs on macOS 13+.
+Requires Swift 6.0 or newer (Xcode 16+), built and tested against Swift 6.3. Runs on macOS 13+.
 
 ## Contributing
 
