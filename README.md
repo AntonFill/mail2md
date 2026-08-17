@@ -60,7 +60,9 @@ A named document that Apple Mail dispositions as `inline` rather than `attachmen
 
 Bodies pass through a lossless cleanup: angle-bracket duplicates of mail and web addresses are collapsed onto their plain twin, `cid:` image references are dropped, and runs of blank lines are normalised. Quote depth (`>`) is never touched, so the structure the mail carried survives.
 
-All messages, including `--verbose` progress, go to stderr. The product is the Markdown file, so stdout stays empty and `2>/dev/null` silences the tool without hiding anything else.
+All diagnostics, including `--verbose` progress, go to stderr. The product is the Markdown file, so stdout carries only genuine data (today just `--version`) and `2>/dev/null` silences the tool without hiding anything else.
+
+An input that cannot be converted exits non-zero and says why in Unix form, `mail2md: <path>: <message>`: a missing file, a directory, a file that cannot be read, or one whose bytes are not valid UTF-8. Nothing is written in those cases, so the tool is safe to use in a pipeline that checks the exit code.
 
 JSON/text output and stdin/stdout piping are on the roadmap.
 
