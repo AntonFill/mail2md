@@ -12,7 +12,7 @@ import Foundation
 struct Mail2md: ParsableCommand {
     static let appname = "mail2md"
     static let abstract = "Convert .eml files to Markdown with YAML frontmatter."
-    static let version = "1.0.1"
+    static let version = "1.0.2"
 
     static let configuration = CommandConfiguration(
         commandName: Self.appname,
@@ -40,13 +40,20 @@ struct Mail2md: ParsableCommand {
 
     mutating func run() throws {
         let inputURL = URL(fileURLWithPath: self.path)
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: self.path, isDirectory: &isDirectory)
 
-        guard FileManager.default.fileExists(atPath: self.path) else {
+        guard exists else {
             printIf(true, "mail2md: \(self.path): No such file")
             throw ExitCode.failure
         }
 
-        let raw = try String(contentsOf: inputURL, encoding: .utf8)
+        guard isDirectory.boolValue == false else {
+            printIf(true, "mail2md: \(self.path): Is a directory")
+            throw ExitCode.failure
+        }
+
+        let raw = try self.read(inputURL)
         let message = EMLParser().parse(raw)
         let outputPath = self.output ?? inputURL.deletingPathExtension().appendingPathExtension("md").path
 
@@ -76,6 +83,33 @@ struct Mail2md: ParsableCommand {
         if self.extractAttachments || self.attachmentsDir != nil {
             try self.extract(from: raw, outputPath: outputPath)
         }
+    }
+
+    /// Reads the input file as UTF-8 text.
+    ///
+    /// Foundation's own failure is unusable as CLI output: it names no path, it is
+    /// localized, and it does not follow this tool's `mail2md: <path>: <message>`
+    /// shape. So both ways this can fail are translated into that shape, and the
+    /// underlying reason stays available under `--verbose` (v1.0.2, found by the
+    /// acceptance tests: no library test can see what the command prints).
+    private func read(_ url: URL) throws -> String {
+        let data: Data
+
+        do {
+            data = try Data(contentsOf: url)
+        }
+        catch {
+            printIf(true, "mail2md: \(self.path): cannot be read")
+            printIf(self.verbose, "mail2md: \(self.path): \(error.localizedDescription)")
+            throw ExitCode.failure
+        }
+
+        guard let text = String(data: data, encoding: .utf8) else {
+            printIf(true, "mail2md: \(self.path): not valid UTF-8 text")
+            throw ExitCode.failure
+        }
+
+        return text
     }
 
     /// Writes the message's attachments, either into `--attachments-dir` or
