@@ -1,8 +1,10 @@
 # mail2md
 
+[![CI](https://github.com/AntonFill/mail2md/actions/workflows/ci.yml/badge.svg)](https://github.com/AntonFill/mail2md/actions/workflows/ci.yml)
+
 Convert `.eml` files to Markdown with YAML frontmatter. Built for Obsidian vaults, paperless archives, and AI-ready personal data pipelines.
 
-Part of a family of local-first CLI tools ([realdate](https://github.com/AntonFill/RealDate), mail2md) that make personal data usable without it ever leaving your Mac.
+Part of a family of local-first CLI tools ([realdate](https://github.com/AntonFill/realdate), mail2md) that make personal data usable without it ever leaving your Mac.
 
 ## Usage
 
