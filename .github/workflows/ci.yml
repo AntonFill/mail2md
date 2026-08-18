@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: macos-26
+    env:
+      # GitHub's runners already report UTC. Pinning it states that assumption
+      # instead of inheriting it, so the run stays comparable to a local
+      # `TZ=UTC swift test`, and a change to the image cannot quietly shift the
+      # zone that the in-process tests read from the environment.
+      TZ: UTC
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Report the toolchain
+        # Recorded rather than pinned: the image picks the Xcode default, and the
+        # log is what tells us afterwards which toolchain a given run used.
+        run: swift --version
+
+      - name: Run the test suite
+        run: swift test
+
+      - name: Build the release binary
+        # The configuration the Homebrew formula builds, so a release-only
+        # failure surfaces here instead of at `brew install` time.
+        run: swift build -c release
