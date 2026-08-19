@@ -77,11 +77,65 @@ struct Mail2mdTests {
         let run = try command.run(["--attachments-dir", attachments.path, input.path])
 
         #expect(run.exitCode == 0)
-        #expect(try command.read("gesuch.md").contains("attachments: [\"Ausweis.pdf\"]"))
+        // Extracting means the files exist, so the note links them instead of
+        // only naming them: a block list in the frontmatter, and the document
+        // closing the body.
+        #expect(try command.read("gesuch.md").contains("attachments:\n  - \"[[Ausweis.pdf]]\"\n"))
+        #expect(try command.read("gesuch.md").hasSuffix("\n[[Ausweis.pdf]]\n"))
         #expect(try Data(contentsOf: attachments.appendingPathComponent("Ausweis.pdf")) == Data("%PDF-1.4\n".utf8))
         // Body furniture stays out of the directory, as it stays out of the listing.
         #expect(command.exists("files/logo.png") == false)
         #expect(command.exists("files/embedded.pdf") == false)
+    }
+
+    @Test func namesExtractedAttachmentsAfterThePattern() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(inlineDocumentEML, named: "gesuch.eml")
+        let attachments = command.path("files")
+
+        let run = try command.run([
+            "--attachments-dir", attachments.path,
+            "--attachment-name", "{date:yyyy.MM.dd} {time:HH.mm} ENCL {name}",
+            input.path,
+        ])
+
+        // The mail is dated 22 Jul 2026 11:00 +0200, and TZ is pinned to UTC.
+        #expect(run.exitCode == 0)
+        #expect(command.exists("files/2026.07.22 09.00 ENCL Ausweis.pdf"))
+        // The note links the file that was really written, under the name the
+        // mail gave it.
+        #expect(try command.read("gesuch.md").hasSuffix("\n[[2026.07.22 09.00 ENCL Ausweis.pdf|Ausweis.pdf]]\n"))
+    }
+
+    @Test func rejectsAnUnknownPlaceholderWithoutWritingAnything() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(inlineDocumentEML, named: "gesuch.eml")
+
+        let run = try command.run(["--attachment-name", "{date} {stem}", input.path])
+
+        #expect(run.exitCode == 1)
+        #expect(run.standardError == "mail2md: {stem}: unknown placeholder in --attachment-name\n")
+        #expect(command.exists("gesuch.md") == false)
+    }
+
+    /// The note is written before the attachments, so a note that would be
+    /// overwritten has to stop the run while the directory is still untouched.
+    /// Without that order the run would leave files behind for a note that was
+    /// never written.
+    @Test func conflictingNoteStopsTheRunBeforeAnyAttachmentIsWritten() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(inlineDocumentEML, named: "gesuch.eml")
+        try "hand-edited in the vault".write(to: command.path("gesuch.md"), atomically: true, encoding: .utf8)
+        let attachments = command.path("files")
+
+        let run = try command.run(["--attachments-dir", attachments.path, input.path])
+
+        #expect(run.exitCode == 1)
+        #expect(try command.read("gesuch.md") == "hand-edited in the vault")
+        #expect(FileManager.default.fileExists(atPath: attachments.path) == false)
     }
 
     // MARK: - Writing twice

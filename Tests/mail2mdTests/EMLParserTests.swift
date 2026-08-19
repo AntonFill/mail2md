@@ -85,8 +85,8 @@ struct AttachmentsTests {
 
         // Plain filename, RFC 2047-decoded filename, and Content-Type `name`
         // fallback, in document order. The inline image part is excluded.
-        #expect(message.attachments == ["Lebenslauf.pdf", "Prüfung.pdf", "Foto.png"])
-        #expect(message.attachments.contains("signature.png") == false)
+        #expect(message.attachmentNames == ["Lebenslauf.pdf", "Prüfung.pdf", "Foto.png"])
+        #expect(message.attachmentNames.contains("signature.png") == false)
     }
 
     @Test func extractsBodyFromNestedAlternativeAlongsideAttachments() {
@@ -105,7 +105,7 @@ struct AttachmentsTests {
 
         // Apple Mail dispositions a real PDF attachment as `inline`. Excluding
         // every inline part dropped it from the listing without a word.
-        #expect(message.attachments == ["Ausweis.pdf"])
+        #expect(message.attachmentNames == ["Ausweis.pdf"])
     }
 
     @Test func stillExcludesNamedInlineImage() {
@@ -113,7 +113,7 @@ struct AttachmentsTests {
 
         // The rule reaches documents, not body furniture: a named inline image
         // is a signature logo far more often than an attachment (v0.5.0).
-        #expect(message.attachments.contains("logo.png") == false)
+        #expect(message.attachmentNames.contains("logo.png") == false)
     }
 
     @Test func excludesInlineDocumentReferencedByContentID() {
@@ -121,7 +121,7 @@ struct AttachmentsTests {
 
         // A part the HTML pulls in via `cid:` is embedded content, whatever its
         // media type, so `Content-ID` vetoes the inline rule.
-        #expect(message.attachments.contains("embedded.pdf") == false)
+        #expect(message.attachmentNames.contains("embedded.pdf") == false)
     }
 
     @Test func extractsNamedInlineDocument() throws {
@@ -137,8 +137,8 @@ struct AttachmentsTests {
 
         // The genuine attachment is listed; the detached S/MIME signature
         // (smime.p7s) is cryptographic machinery and must not appear.
-        #expect(message.attachments == ["Vertrag.pdf"])
-        #expect(message.attachments.contains("smime.p7s") == false)
+        #expect(message.attachmentNames == ["Vertrag.pdf"])
+        #expect(message.attachmentNames.contains("smime.p7s") == false)
         // Body still comes from the signed content's text/plain part.
         #expect(message.body == "Hallo Anton, im Anhang der Vertrag.")
     }
@@ -153,5 +153,16 @@ struct AttachmentsTests {
         #expect(parseContentType("application/x-pkcs7-mime").isSMIMEArtifact)
         // A real attachment type is not an S/MIME artifact.
         #expect(parseContentType("application/pdf").isSMIMEArtifact == false)
+    }
+}
+
+// MARK: -
+extension EmailMessage {
+
+    /// The attachment filenames, which is the shape the assertions here care
+    /// about: selection and naming are what `EMLParser` decides, the media type
+    /// only rides along for the renderer.
+    var attachmentNames: [String] {
+        return self.attachments.map { $0.name }
     }
 }

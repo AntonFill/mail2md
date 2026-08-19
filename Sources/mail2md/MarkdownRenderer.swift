@@ -11,24 +11,42 @@ import Foundation
 ///
 /// Frontmatter follows the EMAIL note template
 /// (`created` / `from` / `to` / `via` / `subject` / `attachments`); the body is
-/// the plain mail text with no heading. `attachments` lists the raw filenames
-/// of the mail's attachment parts (a YAML flow list, or empty scaffolding when
+/// the plain mail text with no heading. `attachments` lists the mail's
+/// attachment parts (a YAML flow list of filenames, or empty scaffolding when
 /// there are none). `via` stays empty scaffolding, because a stateless single-message
 /// converter cannot populate a thread predecessor.
+///
+/// `linksAttachments` turns the listing into wikilinks and closes the body with
+/// the attachments themselves. See its own documentation for when that is
+/// allowed to happen.
 struct MarkdownRenderer {
 
-    /// Zone in which `created` is rendered as a local wall-clock time. Defaults
-    /// to the system zone (a CLI naturally shows local time); tests and a future
-    /// `--timezone` option inject an explicit zone. The sender's own offset
-    /// (`EmailMessage.timeZone`) is deliberately not used here: a mail sent from
-    /// another zone must still read in the reader's local time.
-    init(timeZone: TimeZone = .current) {
+    /// Whether the attachment files exist beside the note.
+    ///
+    /// Off, the note can only name them: `attachments` is a flow list of the
+    /// filenames the mail carried, and the body says nothing about them, because
+    /// a link to a file nobody wrote is a dead link.
+    ///
+    /// On (the CLI sets it when it extracts), the files are real, so the note
+    /// points at them: `attachments` becomes a block list of wikilinks, and the
+    /// body ends with the attachments themselves, images shown, documents
+    /// linked. The CLI owns this decision; the renderer only obeys it.
+    let linksAttachments: Bool
+
+    /// - Parameter timeZone: Zone in which `created` is rendered as a local
+    ///   wall-clock time. Defaults to the system zone (a CLI naturally shows
+    ///   local time); tests and a future `--timezone` option inject an explicit
+    ///   zone. The sender's own offset (`EmailMessage.timeZone`) is deliberately
+    ///   not used here: a mail sent from another zone must still read in the
+    ///   reader's local time.
+    init(timeZone: TimeZone = .current, linksAttachments: Bool = false) {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
 
         self._dateFormatter = formatter
+        self.linksAttachments = linksAttachments
     }
 
     fileprivate let _dateFormatter: DateFormatter
@@ -42,10 +60,11 @@ struct MarkdownRenderer {
         lines.append(self.field("to", message.to))
         lines.append(self.field("via", nil))
         lines.append(self.field("subject", message.subject))
-        lines.append(self.listField("attachments", message.attachments))
+        lines.append(contentsOf: self.attachmentsField(message.attachments))
         lines.append("---")
         lines.append("")
         lines.append(message.body)
+        lines.append(contentsOf: self.attachmentBlock(message.attachments))
         lines.append("")
 
         return lines.joined(separator: "\n")
@@ -75,6 +94,25 @@ extension MarkdownRenderer {
         return "\(name): [\(items)]"
     }
 
+    /// The `attachments` frontmatter, as one or more lines.
+    ///
+    /// A flow list of plain filenames while the files are only named, a block
+    /// list of wikilinks once they exist on disk. The block form is what makes
+    /// each attachment a node of its own; the flow form would have to quote the
+    /// brackets and reads worse the longer the names get, and vault-schema names
+    /// are long.
+    func attachmentsField(_ attachments: [Attachment]) -> [String] {
+        guard self.linksAttachments, attachments.isEmpty == false else {
+            return [self.listField("attachments", attachments.map { $0.name })]
+        }
+
+        let items = attachments.map { attachment in
+            return "  - \(self.quoted(self.wikilink(attachment.name)))"
+        }
+
+        return ["attachments:"] + items
+    }
+
     /// Local wall-clock timestamp `YYYY-MM-DDTHH:mm` in the renderer's zone.
     func timestamp(_ date: Date) -> String {
         return self._dateFormatter.string(from: date)
@@ -84,5 +122,83 @@ extension MarkdownRenderer {
     func quoted(_ value: String) -> String {
         let escaped = value.replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
+    }
+}
+
+// MARK: - The attachment block
+extension MarkdownRenderer {
+
+    /// The attachments as the body's closing block: the images in a two-column
+    /// table, the documents linked below them. Empty unless the files are on
+    /// disk, because a link to a file nobody wrote is a dead link.
+    ///
+    /// No heading and no rule: a mail client shows the attachments below the
+    /// text without announcing them, and the frontmatter has already named them.
+    /// No connecting prose either, since the links carry their own labels and
+    /// the body takes no commentary.
+    func attachmentBlock(_ attachments: [Attachment]) -> [String] {
+        guard self.linksAttachments, attachments.isEmpty == false else {
+            return []
+        }
+
+        let images = attachments.filter { $0.isImage }
+        let documents = attachments.filter { $0.isImage == false }
+        var lines: [String] = []
+
+        if images.isEmpty == false {
+            lines.append("")
+            lines.append(contentsOf: self.imageTable(images))
+        }
+
+        // Blank-line separated rather than a bullet list: a run of bare
+        // wikilinks would fold into one paragraph, and the block is a list of
+        // enclosures, not of points.
+        for document in documents {
+            lines.append("")
+            lines.append(self.link(document))
+        }
+
+        return lines
+    }
+
+    /// The images embedded, two per row.
+    ///
+    /// Two columns because a phone screenshot series otherwise fills ten
+    /// screens, and a table because it is the only way Markdown places two
+    /// embeds side by side. The header row is empty on purpose: the columns
+    /// carry no meaning, they are a grid.
+    func imageTable(_ images: [Attachment]) -> [String] {
+        var lines = ["|  |  |", "|---|---|"]
+
+        for index in stride(from: 0, to: images.count, by: 2) {
+            let left = self.embed(images[index])
+            let right = index + 1 < images.count ? self.embed(images[index + 1]) : ""
+            lines.append("| \(left) | \(right) |")
+        }
+
+        return lines
+    }
+
+    /// An image, shown in place.
+    func embed(_ attachment: Attachment) -> String {
+        return "!\(self.wikilink(attachment.name))"
+    }
+
+    /// A document, linked. It keeps the name the sender gave it as the link's
+    /// alias whenever extraction renamed the file, so the note reads as the mail
+    /// meant it while the link points where the file actually is.
+    func link(_ attachment: Attachment) -> String {
+        guard attachment.name != attachment.sourceName else {
+            return self.wikilink(attachment.name)
+        }
+        return self.wikilink(attachment.name, alias: attachment.sourceName)
+    }
+
+    /// An Obsidian wikilink, optionally aliased.
+    func wikilink(_ target: String, alias: String? = nil) -> String {
+        guard let alias else {
+            return "[[\(target)]]"
+        }
+        return "[[\(target)|\(alias)]]"
     }
 }

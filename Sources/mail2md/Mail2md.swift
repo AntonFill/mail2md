@@ -12,7 +12,7 @@ import Foundation
 struct Mail2md: ParsableCommand {
     static let appname = "mail2md"
     static let abstract = "Convert .eml files to Markdown with YAML frontmatter."
-    static let version = "1.0.2"
+    static let version = "1.1.0"
 
     static let configuration = CommandConfiguration(
         commandName: Self.appname,
@@ -29,14 +29,28 @@ struct Mail2md: ParsableCommand {
     @Flag(name: .shortAndLong, help: "Overwrite existing output files that differ from the generated Markdown.")
     var force = false
 
-    @Flag(name: .long, help: "Write attachment files (next to the output, or into --attachments-dir).")
+    @Flag(name: .long, help: "Write attachment files (next to the output, or into --attachments-dir) and link them from the note.")
     var extractAttachments = false
 
     @Option(name: .long, help: "Directory for extracted attachments; implies --extract-attachments. Defaults next to the output.")
     var attachmentsDir: String?
 
+    @Option(name: .long, help: "Rename extracted attachments after a pattern, e.g. \"{date} {time} ENCL {name}\"; placeholders are {name}, {ext}, {date} and {time}, the latter two with an optional format ({date:yyyy.MM.dd}). Implies --extract-attachments.")
+    var attachmentName: String?
+
     @Argument(help: "Path to an .eml file.")
     var path: String
+
+    /// A planned extraction: which parts go where, and under which names.
+    ///
+    /// Planned rather than performed, because the note has to link the files by
+    /// the names they will carry while still being written first: a conflicting
+    /// note aborts the run, and it must do so before anything lands on disk.
+    private struct Extraction {
+        let parts: [AttachmentPart]
+        let extractor: AttachmentExtractor
+        let names: [String]
+    }
 
     mutating func run() throws {
         let inputURL = URL(fileURLWithPath: self.path)
@@ -63,12 +77,19 @@ struct Mail2md: ParsableCommand {
             printIf(true, "mail2md: \(self.path): missing or unparsable Date header (created left empty)")
         }
 
+        // Extraction is only planned here. The note is written first, so a
+        // conflict aborts before any attachment file exists, but it already
+        // links the attachments by the names the plan gives them.
+        let extraction = try self.planExtraction(from: raw, date: message.date, outputPath: outputPath)
+        let noted = extraction.map { message.replacingAttachments(withNames: $0.names) } ?? message
+
         // One .eml converts to exactly one Markdown file. A quoted reply chain
         // stays in that single file (as the mail itself keeps it); the semantic
         // per-message split is the consumer's job, not this stateless converter's.
+        let renderer = MarkdownRenderer(linksAttachments: extraction != nil)
         let document = MarkdownWriter.Document(
             url: URL(fileURLWithPath: outputPath),
-            content: MarkdownRenderer().render(message)
+            content: renderer.render(noted)
         )
 
         do {
@@ -80,8 +101,9 @@ struct Mail2md: ParsableCommand {
             throw ExitCode.failure
         }
 
-        if self.extractAttachments || self.attachmentsDir != nil {
-            try self.extract(from: raw, outputPath: outputPath)
+        if let extraction {
+            let written = try extraction.extractor.extract(extraction.parts)
+            printIf(self.verbose, "mail2md: extracted \(written.count) attachment(s) to \(extraction.extractor.directory.path)")
         }
     }
 
@@ -112,14 +134,47 @@ struct Mail2md: ParsableCommand {
         return text
     }
 
-    /// Writes the message's attachments, either into `--attachments-dir` or
-    /// alongside the output Markdown.
-    private func extract(from raw: String, outputPath: String) throws {
+    /// Plans the attachment extraction, or nil when none was asked for.
+    ///
+    /// The three attachment options all ask for extraction: naming or a target
+    /// directory is meaningless without it. Throws when the pattern names a
+    /// placeholder that does not exist, since that would otherwise end up
+    /// verbatim in a filename.
+    private func planExtraction(from raw: String, date: Date?, outputPath: String) throws -> Extraction? {
+        guard self.extractAttachments || self.attachmentsDir != nil || self.attachmentName != nil else {
+            return nil
+        }
+
         let parts = EMLParser().attachmentParts(from: raw)
         let directory = self.attachmentsDir.map { URL(fileURLWithPath: $0) } ?? URL(fileURLWithPath: outputPath).deletingLastPathComponent()
+        let extractor = AttachmentExtractor(directory: directory, naming: try self.naming(for: date))
 
-        let written = try AttachmentExtractor(directory: directory).extract(parts)
-        printIf(self.verbose, "mail2md: extracted \(written.count) attachment(s) to \(directory.path)")
+        return Extraction(parts: parts, extractor: extractor, names: extractor.plannedNames(parts))
+    }
+
+    /// The naming built from `--attachment-name`, or nil when no pattern was
+    /// given or the mail cannot supply what the pattern asks for.
+    ///
+    /// A pattern that renders the mail's date needs one, and a mail without a
+    /// parsable `Date:` header has none. Rather than writing a filename with a
+    /// hole in it, the run says so and falls back to the attachments' own names.
+    private func naming(for date: Date?) throws -> AttachmentNaming? {
+        guard let pattern = self.attachmentName else {
+            return nil
+        }
+
+        let unknown = AttachmentNaming.unknownPlaceholders(in: pattern)
+        guard unknown.isEmpty else {
+            printIf(true, "mail2md: {\(unknown.joined(separator: "}, {"))}: unknown placeholder in --attachment-name")
+            throw ExitCode.failure
+        }
+
+        if date == nil, AttachmentNaming.requiresDate(pattern) {
+            printIf(true, "mail2md: \(self.path): --attachment-name needs the mail's date (attachments keep their own names)")
+            return nil
+        }
+
+        return AttachmentNaming(pattern: pattern, date: date)
     }
 }
 

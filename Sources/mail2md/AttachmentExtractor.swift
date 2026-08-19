@@ -17,12 +17,38 @@ import UniformTypeIdentifiers
 /// `-1`, `-2`, … so nothing is overwritten). Parts without a usable name fall
 /// back to `unnamed`, with an extension derived from the media type when the
 /// system can map it.
+///
+/// A `naming` pattern renames each file as it is written, so a consumer with a
+/// filename schema of its own gets it applied here instead of renaming
+/// afterwards (see `AttachmentNaming`).
 struct AttachmentExtractor {
     let directory: URL
+    let naming: AttachmentNaming?
+
+    init(directory: URL, naming: AttachmentNaming? = nil) {
+        self.directory = directory
+        self.naming = naming
+    }
+
+    /// The filenames `extract` would write, in document order, without writing
+    /// anything.
+    ///
+    /// It exists because the note links the files by the names they will have,
+    /// while the note itself is still written first: a conflicting note has to
+    /// abort the run before any attachment lands on disk. So the CLI plans the
+    /// names, writes the note, and only then extracts.
+    func plannedNames(_ parts: [AttachmentPart]) -> [String] {
+        var taken = self.existingEntries()
+
+        return parts.map { part in
+            return self.uniqueName(self.targetName(for: part), taken: &taken)
+        }
+    }
 
     /// Writes each part's decoded bytes into `directory`, returning the
     /// filenames actually written, in document order. No directory is created
     /// when there is nothing to extract.
+    @discardableResult
     func extract(_ parts: [AttachmentPart]) throws -> [String] {
         guard parts.isEmpty == false else {
             return []
@@ -30,19 +56,33 @@ struct AttachmentExtractor {
 
         try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
 
-        // Seed with existing entries so extraction never overwrites a file.
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: self.directory.path)) ?? []
-        var taken = Set(contents)
+        var taken = self.existingEntries()
         var written: [String] = []
 
         for part in parts {
-            let name = self.uniqueName(self.safeName(for: part), taken: &taken)
+            let name = self.uniqueName(self.targetName(for: part), taken: &taken)
             let data = decodeToBytes(part.entity)
             try data.write(to: self.directory.appendingPathComponent(name))
             written.append(name)
         }
 
         return written
+    }
+
+    /// The names already in the directory, so extraction never overwrites a
+    /// file and a plan agrees with the write that follows it.
+    private func existingEntries() -> Set<String> {
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: self.directory.path)) ?? []
+
+        return Set(contents)
+    }
+
+    /// The name a part is written under: its sanitized own name, put through
+    /// the naming pattern when there is one.
+    private func targetName(for part: AttachmentPart) -> String {
+        let name = self.safeName(for: part)
+
+        return self.naming?.apply(to: name) ?? name
     }
 
     // MARK: -

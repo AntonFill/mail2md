@@ -14,6 +14,7 @@ mail2md Mail.eml -o Note.md              # explicit output path
 mail2md Mail.eml --force                 # overwrite output files that differ from the generated Markdown
 mail2md Mail.eml --extract-attachments   # also write attachment files alongside the output
 mail2md Mail.eml --attachments-dir ./att # write attachments into ./att (implies extraction)
+mail2md Mail.eml --attachment-name "{date} {time} ENCL {name}"   # rename them as they are written
 mail2md Mail.eml --verbose               # report what was parsed and written
 mail2md --version
 mail2md --help
@@ -40,6 +41,36 @@ Hallo Anton,
 ...
 ```
 
+## Attachments
+
+By default the frontmatter names the attachments and nothing else happens to them, because a note cannot link a file that was never written.
+
+Ask for extraction and the note starts pointing at real files. `attachments` becomes a list of wikilinks, and the body ends with the attachments themselves: images embedded two per row, documents linked. No heading and no rule, since a mail client shows its attachments below the text without announcing them.
+
+```sh
+mail2md Mail.eml --attachments-dir ./attachments \
+  --attachment-name "{date:yyyy.MM.dd} {time:HH.mm} ENCL {name}"
+```
+
+```markdown
+attachments:
+  - "[[2026.08.18 07.52 ENCL Foto.JPG]]"
+  - "[[2026.08.18 07.52 ENCL Auftrag.pdf]]"
+---
+
+Gesendet von Outlook für iOS
+
+|  |  |
+|---|---|
+| ![[2026.08.18 07.52 ENCL Foto.JPG]] |  |
+
+[[2026.08.18 07.52 ENCL Auftrag.pdf|Auftrag.pdf]]
+```
+
+`--attachment-name` is how a naming scheme gets in without the tool having to know one. Four placeholders: `{name}` (the filename without its extension), `{ext}` (the extension, dot included), and `{date}`/`{time}`, which render the **mail's** timestamp so an attachment sorts behind the mail it came with. Those two take a `DateFormatter` pattern after a colon, `{date:yyyy.MM.dd}`, and default to `yyyy-MM-dd` and `HH-mm`. A pattern that does not place `{ext}` itself gets the extension appended, and a `/` in the result becomes `-`, so a pattern can never write outside its directory. A document that was renamed keeps the sender's own filename as the link's alias.
+
+The note is written before the attachments, so a note that would be overwritten stops the run while the attachment directory is still untouched.
+
 ## How it compares
 
 **The Obsidian plugins mostly view rather than convert.** MSG Handler, EML Email Viewer, Email Reader and Embed EML render the mail inside Obsidian, but the file stays an `.eml`. It never becomes a note, and one of them states outright that its content does not reach Obsidian's global search.
@@ -54,7 +85,7 @@ It is also built to be fast and unremarkable to use. A 57 KB mail with a four-de
 
 ## Status
 
-Parses single-part, `multipart/alternative` (prefers `text/plain`) and `multipart/mixed` messages, decodes quoted-printable and base64 transfer encodings, and decodes RFC 2047 encoded-word headers. Converts html-only mails to Markdown, lists attachment filenames in the frontmatter, and optionally extracts attachment files to disk (S/MIME signature parts are excluded; extracted filenames are sanitised, so a crafted header cannot write outside the target directory).
+Parses single-part, `multipart/alternative` (prefers `text/plain`) and `multipart/mixed` messages, decodes quoted-printable and base64 transfer encodings, and decodes RFC 2047 encoded-word headers. Converts html-only mails to Markdown, lists attachment filenames in the frontmatter, and optionally extracts attachment files to disk under a naming scheme of your choosing, linking them from the note (S/MIME signature parts are excluded; extracted filenames are sanitised, so a crafted header cannot write outside the target directory).
 
 A named document that Apple Mail dispositions as `inline` rather than `attachment` still counts as an attachment, since that is how a real PDF often arrives. Inline *images* do not: a named inline image is a signature logo or a tracking pixel far more often than a file someone meant to send.
 

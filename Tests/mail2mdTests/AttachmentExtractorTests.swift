@@ -145,4 +145,51 @@ struct AttachmentExtractionTests {
         #expect(written.isEmpty)
         #expect(FileManager.default.fileExists(atPath: dir.path) == false)
     }
+
+    // MARK: - Naming
+
+    @Test func writesEachFileUnderTheNamingPattern() throws {
+        let dir = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let message = EMLParser().parse(extractEML)
+        let naming = AttachmentNaming(pattern: "{date:yyyy.MM.dd} {time:HH.mm} ENCL {name}", date: message.date, timeZone: TimeZone(identifier: "UTC")!)
+
+        let written = try AttachmentExtractor(directory: dir, naming: naming)
+            .extract(EMLParser().attachmentParts(from: extractEML))
+
+        // extractEML is dated 22 Jul 2026 10:00 +0200, so 08:00 in UTC.
+        #expect(written.contains("2026.07.22 08.00 ENCL Doc.pdf"))
+        #expect(try self.bytes("2026.07.22 08.00 ENCL Doc.pdf", in: dir) == Data("%PDF-1.4\n".utf8))
+    }
+
+    /// The note is written before the files are, so it links them by planned
+    /// names. A plan that disagreed with the write would produce dead links,
+    /// including in the case that makes the two hardest to keep in step: two
+    /// parts colliding on one name.
+    @Test func planNamesTheFilesThatExtractionThenWrites() throws {
+        let dir = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let parts = EMLParser().attachmentParts(from: extractEML)
+        let extractor = AttachmentExtractor(directory: dir)
+
+        let planned = extractor.plannedNames(parts)
+        let written = try extractor.extract(parts)
+
+        #expect(planned == written)
+        #expect(planned.filter { $0.hasPrefix("Doc") } == ["Doc.pdf", "Doc-1.pdf"])
+    }
+
+    /// Planning must not touch the disk: the directory it names files in may not
+    /// even exist yet, and a run that aborts on a note conflict has to leave
+    /// nothing behind.
+    @Test func planningWritesNothing() throws {
+        let dir = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appendingPathComponent("attachments")
+
+        let planned = AttachmentExtractor(directory: target).plannedNames(EMLParser().attachmentParts(from: extractEML))
+
+        #expect(planned.isEmpty == false)
+        #expect(FileManager.default.fileExists(atPath: target.path) == false)
+    }
 }

@@ -18,7 +18,61 @@ struct EmailMessage {
     let timeZone: TimeZone?
     let messageID: String?
     let body: String
-    let attachments: [String]  // filenames of attachment parts, in document order
+    let attachments: [Attachment]  // attachment parts, in document order
+}
+
+// MARK: -
+
+/// An attachment as the note refers to it: the filename it is listed and linked
+/// under, plus the media type that decides whether it can be embedded.
+///
+/// The name is the mail's own filename until the attachment is actually written
+/// to disk; from then on it is the name on disk, which is what a link has to
+/// point at. `EmailMessage.replacingAttachments` performs that swap.
+struct Attachment {
+    let name: String
+    let mediaType: String
+
+    /// The filename the mail itself carried. It equals `name` until extraction
+    /// renames the file, and a link then carries it as its alias, so the note
+    /// still says what the sender called the thing.
+    let sourceName: String
+
+    init(name: String, mediaType: String, sourceName: String? = nil) {
+        self.name = name
+        self.mediaType = mediaType
+        self.sourceName = sourceName ?? name
+    }
+
+    /// Whether the attachment is an image, and can therefore be shown rather
+    /// than only linked.
+    var isImage: Bool {
+        return self.mediaType.hasPrefix("image/")
+    }
+}
+
+// MARK: -
+extension EmailMessage {
+
+    /// The same message with its attachments renamed, keeping their order and
+    /// media types. Used after extraction, so the note lists and links the
+    /// files that were really written instead of the names the mail carried.
+    func replacingAttachments(withNames names: [String]) -> EmailMessage {
+        let renamed = zip(self.attachments, names).map { attachment, name in
+            return Attachment(name: name, mediaType: attachment.mediaType, sourceName: attachment.sourceName)
+        }
+
+        return EmailMessage(
+            from: self.from,
+            to: self.to,
+            subject: self.subject,
+            date: self.date,
+            timeZone: self.timeZone,
+            messageID: self.messageID,
+            body: self.body,
+            attachments: renamed
+        )
+    }
 }
 
 /// An attachment part located in the MIME tree: its resolved filename (nil when
@@ -106,8 +160,10 @@ extension EMLParser {
     /// parameter, falling back to the content type's `name`; an attachment
     /// without either is listed as `unnamed` so its presence is not silently
     /// lost.
-    func attachments(headers: [String: String], rawBody: String) -> [String] {
-        return self.attachmentParts(headers: headers, rawBody: rawBody).map { $0.filename ?? "unnamed" }
+    func attachments(headers: [String: String], rawBody: String) -> [Attachment] {
+        return self.attachmentParts(headers: headers, rawBody: rawBody).map { part in
+            return Attachment(name: part.filename ?? "unnamed", mediaType: part.mediaType)
+        }
     }
 
     /// Locates every attachment part in the MIME tree, keeping the encoded leaf
