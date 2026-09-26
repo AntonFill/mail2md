@@ -11,6 +11,7 @@ import Foundation
 struct EmailMessage {
     let from: String?
     let to: String?
+    let cc: String?
     let subject: String?
     let date: Date?
     // The sender's declared UTC offset: a parsed fact, kept for completeness.
@@ -65,6 +66,7 @@ extension EmailMessage {
         return EmailMessage(
             from: self.from,
             to: self.to,
+            cc: self.cc,
             subject: self.subject,
             date: self.date,
             timeZone: self.timeZone,
@@ -86,8 +88,9 @@ struct AttachmentPart {
 
 /// Parses RFC 5322 (.eml) files.
 ///
-/// Scope: single-part and `multipart/alternative` messages; quoted-printable
-/// and base64 transfer encodings; RFC 2047 encoded-word headers.
+/// Scope: single-part and multipart messages (one form of an `alternative`,
+/// every body part of any other container, in order); quoted-printable and
+/// base64 transfer encodings; RFC 2047 encoded-word headers.
 struct EMLParser {
 
     func parse(_ raw: String) -> EmailMessage {
@@ -99,6 +102,7 @@ struct EMLParser {
         return EmailMessage(
             from: headers["from"].map(decodeRFC2047Header),
             to: headers["to"].map(decodeRFC2047Header),
+            cc: headers["cc"].map(decodeRFC2047Header),
             subject: headers["subject"].map(decodeRFC2047Header),
             date: parsedDate?.date,
             timeZone: parsedDate?.timeZone,
@@ -114,11 +118,31 @@ extension EMLParser {
 
     /// Selects and decodes the best plain-text body for a message.
     func extractBody(headers: [String: String], rawBody: String) -> String {
-        return self.plainText(headers: headers, rawBody: rawBody) ?? rawBody
+        if let text = self.plainText(headers: headers, rawBody: rawBody) {
+            return text
+        }
+
+        // No text anywhere. A container that splits into parts simply carries
+        // none, a scan sent as a bare PDF, and its raw parts are the
+        // attachments, base64 and all, so the body is empty. Only a container
+        // that cannot be split is shown raw, so a malformed mail stays visible.
+        let contentType = parseContentType(headers["content-type"])
+        let parts = contentType.boundary.map { self.splitParts(rawBody, boundary: $0) } ?? []
+        if parts.isEmpty {
+            return rawBody
+        }
+        return ""
     }
 
-    /// Returns a renderable text body, descending into multipart containers and
-    /// preferring `text/plain`; an HTML part is converted to Markdown.
+    /// Returns a renderable text body, descending into multipart containers; an
+    /// HTML part is converted to Markdown.
+    ///
+    /// A `multipart/alternative` carries the same content in several forms, so
+    /// exactly one of them is taken (see `preferredAlternative`). Every other
+    /// container (`mixed`, `related`, `signed`) holds parts that are read one
+    /// after the other, so its body parts are joined in document order: Apple
+    /// Mail splits the text around an attachment placed in the middle of it,
+    /// and taking only the first piece dropped the rest without a word.
     func plainText(headers: [String: String], rawBody: String) -> String? {
         let contentType = parseContentType(headers["content-type"])
 
@@ -130,25 +154,71 @@ extension EMLParser {
             return nil
         }
         let entities = self.splitParts(rawBody, boundary: boundary).map { self.parseEntity($0) }
+        let bodyParts = entities.filter { self.isBodyPart($0) }
 
+        if contentType.mediaType == "multipart/alternative" {
+            return self.preferredAlternative(bodyParts)
+        }
+
+        let segments = bodyParts
+            .compactMap { self.bodyText(of: $0) }
+            .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
+
+        guard segments.isEmpty == false else {
+            return nil
+        }
+        return segments.joined(separator: "\n\n")
+    }
+
+    /// Takes one form of a `multipart/alternative`: `text/plain` first, then a
+    /// nested container that yields text, then HTML converted to Markdown.
+    func preferredAlternative(_ parts: [MIMEEntity]) -> String? {
         // 1. Prefer a text/plain part at this level.
-        for entity in entities where parseContentType(entity.headers["content-type"]).mediaType == "text/plain" {
-            return self.renderedText(entity)
+        for part in parts where parseContentType(part.headers["content-type"]).mediaType == "text/plain" {
+            return self.renderedText(part)
         }
 
         // 2. Descend into nested multipart containers (e.g. multipart/related).
-        for entity in entities where parseContentType(entity.headers["content-type"]).mediaType.hasPrefix("multipart/") {
-            if let nested = self.plainText(headers: entity.headers, rawBody: entity.rawBody) {
+        for part in parts where parseContentType(part.headers["content-type"]).mediaType.hasPrefix("multipart/") {
+            if let nested = self.plainText(headers: part.headers, rawBody: part.rawBody) {
                 return nested
             }
         }
 
         // 3. Fall back to an HTML part, converted to Markdown.
-        for entity in entities where parseContentType(entity.headers["content-type"]).mediaType == "text/html" {
-            return self.renderedText(entity)
+        for part in parts where parseContentType(part.headers["content-type"]).mediaType == "text/html" {
+            return self.renderedText(part)
         }
 
         return nil
+    }
+
+    /// Whether a part is text to be read as the mail rather than a file that
+    /// came with it: plain text, HTML or a container, and not dispositioned
+    /// `attachment`.
+    ///
+    /// The disposition is what decides. An attached `.txt` is `text/plain` just
+    /// like the body, and until v1.2.0 it took the body's place, because the
+    /// `text/plain` preference found it before descending into the mail's own
+    /// `multipart/alternative`. A part without that disposition is shown inline
+    /// by a mail client, so it is read inline here too.
+    func isBodyPart(_ part: MIMEEntity) -> Bool {
+        let mediaType = parseContentType(part.headers["content-type"]).mediaType
+        let isText = ["text/plain", "text/html"].contains(mediaType)
+
+        guard isText || mediaType.hasPrefix("multipart/") else {
+            return false
+        }
+        return parseContentDisposition(part.headers["content-disposition"]).type != "attachment"
+    }
+
+    /// The text a body part contributes: a container its own selection, a leaf
+    /// its decoded content, converted to Markdown if it is HTML.
+    func bodyText(of part: MIMEEntity) -> String? {
+        guard parseContentType(part.headers["content-type"]).mediaType.hasPrefix("multipart/") else {
+            return self.renderedText(part)
+        }
+        return self.plainText(headers: part.headers, rawBody: part.rawBody)
     }
 
     /// Collects the filenames of attachment parts across the MIME tree.

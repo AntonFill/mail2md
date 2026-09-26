@@ -18,6 +18,7 @@ struct MarkdownRendererTests {
             created: 2026-06-15T09:41
             from: "Jane Doe <jane@example.com>"
             to: "Anton Fillmann <anton@example.com>"
+            cc:
             via:
             subject: "Projektanfrage iOS"
             attachments:
@@ -96,6 +97,7 @@ struct AttachmentBlockTests {
         return EmailMessage(
             from: "Christine <christine@example.com>",
             to: "Anton Fillmann <anton@example.com>",
+            cc: nil,
             subject: "Fotos",
             date: nil,
             timeZone: nil,
@@ -190,5 +192,55 @@ struct AttachmentBlockTests {
 
         #expect(markdown.contains("\nattachments:\n---\n"))
         #expect(markdown.hasSuffix("Gesendet von Outlook für iOS\n"))
+    }
+}
+
+// MARK: -
+
+/// The frontmatter's key set, held against the EMAIL note template the output
+/// follows. That template lives in the author's vault, which this repository
+/// cannot read, so its keys are written out below in its order; when the
+/// template changes, this list changes with it.
+///
+/// A test of values only checks what was built. `cc` never was, so no test
+/// could notice it missing until a real mail lost the colleague it was copied
+/// to (2026-09-08). A test of the key set fails on the next key nobody built.
+struct FrontmatterContractTests {
+
+    static let templateKeys = ["created", "from", "to", "cc", "via", "subject", "attachments"]
+
+    /// The top-level keys of a note's frontmatter, in order. Indented lines are
+    /// list items of the key above them, not keys of their own.
+    static func keys(of markdown: String) -> [String] {
+        let lines = markdown.components(separatedBy: "\n")
+        let frontmatter = lines.dropFirst().prefix { $0 != "---" }
+
+        return frontmatter
+            .filter { $0.hasPrefix(" ") == false }
+            .compactMap { $0.split(separator: ":", maxSplits: 1).first.map(String.init) }
+    }
+
+    /// Every key, in the template's order, whether the mail fills it or not:
+    /// a bare mail, one with `Cc`, one with attachments, and one carrying no
+    /// header but its subject.
+    @Test(arguments: [simpleEML, ccEML, mixedEML, "Subject: Only a subject\r\n\r\nBody"])
+    func writesTheTemplateKeysInTheTemplateOrder(eml: String) {
+        let markdown = MarkdownRenderer().render(EMLParser().parse(eml))
+
+        #expect(Self.keys(of: markdown) == Self.templateKeys)
+    }
+
+    /// Linked attachments turn `attachments` into a block list, which must not
+    /// change the key set around it.
+    @Test func keepsTheKeySetWhenAttachmentsAreLinked() {
+        let markdown = MarkdownRenderer(linksAttachments: true).render(EMLParser().parse(mixedEML))
+
+        #expect(Self.keys(of: markdown) == Self.templateKeys)
+    }
+
+    @Test func writesCcAfterToWithEveryRecipient() {
+        let markdown = MarkdownRenderer().render(EMLParser().parse(ccEML))
+
+        #expect(markdown.contains("\ncc: \"Müller Anna <anna@example.com>, Team Lead <lead@example.com>\"\nvia:\n"))
     }
 }

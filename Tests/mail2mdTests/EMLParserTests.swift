@@ -71,9 +71,67 @@ struct EMLParserTests {
         let message = EMLParser().parse("X-Custom: nothing useful\r\n\r\nJust a body")
 
         #expect(message.from == nil)
+        #expect(message.cc == nil)
         #expect(message.subject == nil)
         #expect(message.date == nil)
         #expect(message.body == "Just a body")
+    }
+
+    /// Several recipients, a folded header and an encoded display name, all
+    /// in one `Cc` line, as the mail that showed the field missing had them.
+    @Test func parsesCcWithSeveralRecipients() {
+        let message = EMLParser().parse(ccEML)
+
+        #expect(message.to == "Anton Fillmann <anton@example.com>, Jane Doe <jane@example.com>")
+        #expect(message.cc == "Müller Anna <anna@example.com>, Team Lead <lead@example.com>")
+    }
+
+    /// Header names are case-insensitive, and mailers differ in how they spell
+    /// this one.
+    @Test(arguments: ["Cc", "CC", "cc"])
+    func readsCcWhateverTheCaseOfItsName(name: String) {
+        let message = EMLParser().parse("\(name): Team <team@example.com>\r\nSubject: T\r\n\r\nBody")
+
+        #expect(message.cc == "Team <team@example.com>")
+    }
+}
+
+// MARK: -
+
+/// Which parts of the MIME tree become the body. A text part is not body just
+/// because it is text: a file can be `text/plain` too, and a body can arrive in
+/// several parts.
+struct BodySelectionTests {
+
+    @Test func neverTakesAnAttachedTextFileForTheBody() {
+        let message = EMLParser().parse(textAttachmentEML)
+
+        #expect(message.body == "Hallo Anton, die Notizen hängen an.")
+        #expect(message.body.contains("Inhalt der angehängten Datei") == false)
+        // It is still an attachment, only no longer the body as well.
+        #expect(message.attachmentNames == ["Notizen.txt"])
+    }
+
+    @Test func joinsTheTextOnEitherSideOfAnInlineAttachment() {
+        let message = EMLParser().parse(splitBodyEML)
+
+        #expect(message.body == "Guten Tag, hier das Formular:\n\nFreundliche Grüsse\nAnton Fillmann")
+        #expect(message.attachmentNames == ["Formular.pdf"])
+    }
+
+    @Test func leavesTheBodyEmptyForAMailOfAttachmentsOnly() {
+        let message = EMLParser().parse(attachmentOnlyEML)
+
+        #expect(message.body.isEmpty)
+        #expect(message.attachmentNames == ["Scan.pdf"])
+    }
+
+    /// A container without a boundary cannot be split, so its raw text is all
+    /// there is. Shown raw, a malformed mail stays visible instead of vanishing.
+    @Test func keepsTheRawBodyOfAContainerThatCannotBeSplit() {
+        let message = EMLParser().parse("Content-Type: multipart/mixed\r\nSubject: T\r\n\r\nNur Text")
+
+        #expect(message.body == "Nur Text")
     }
 }
 

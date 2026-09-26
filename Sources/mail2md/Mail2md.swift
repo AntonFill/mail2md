@@ -12,7 +12,7 @@ import Foundation
 struct Mail2md: ParsableCommand {
     static let appname = "mail2md"
     static let abstract = "Convert .eml files to Markdown with YAML frontmatter."
-    static let version = "1.1.0"
+    static let version = "1.2.0"
 
     static let configuration = CommandConfiguration(
         commandName: Self.appname,

@@ -39,6 +39,7 @@ struct Mail2mdTests {
             created: 2026-06-15T07:41
             from: "Jane Doe <jane@example.com>"
             to: "Anton Fillmann <anton@example.com>"
+            cc:
             via:
             subject: "Projektanfrage iOS"
             attachments:

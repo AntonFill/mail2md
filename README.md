@@ -31,6 +31,7 @@ Output format:
 created: 2026-06-15T09:41
 from: "Jane Doe <jane@example.com>"
 to: "Anton Fillmann <anton@example.com>"
+cc:
 via:
 subject: "Projektanfrage iOS"
 attachments:
@@ -85,7 +86,7 @@ It is also built to be fast and unremarkable to use. A 57 KB mail with a four-de
 
 ## Status
 
-Parses single-part, `multipart/alternative` (prefers `text/plain`) and `multipart/mixed` messages, decodes quoted-printable and base64 transfer encodings, and decodes RFC 2047 encoded-word headers. Converts html-only mails to Markdown, lists attachment filenames in the frontmatter, and optionally extracts attachment files to disk under a naming scheme of your choosing, linking them from the note (S/MIME signature parts are excluded; extracted filenames are sanitised, so a crafted header cannot write outside the target directory).
+Parses single-part, `multipart/alternative` (prefers `text/plain`) and `multipart/mixed` messages, decodes quoted-printable and base64 transfer encodings, and decodes RFC 2047 encoded-word headers. In a `multipart/mixed` message every inline text part is read in order, so text that continues after an attachment placed mid-message is kept, and an attached text file never stands in for the body. Converts html-only mails to Markdown, lists attachment filenames in the frontmatter, and optionally extracts attachment files to disk under a naming scheme of your choosing, linking them from the note (S/MIME signature parts are excluded; extracted filenames are sanitised, so a crafted header cannot write outside the target directory).
 
 A named document that Apple Mail dispositions as `inline` rather than `attachment` still counts as an attachment, since that is how a real PDF often arrives. Inline *images* do not: a named inline image is a signature logo or a tracking pixel far more often than a file someone meant to send.
 

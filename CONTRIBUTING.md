@@ -41,12 +41,12 @@ These are not negotiable, and they apply to sources and tests alike.
 ### Tests
 
 - **Swift Testing** (`import Testing`, `@Test`, `#expect`), not XCTest.
-- **One test file per source file**, named after it: `BodyCleanerTests.swift` covers `BodyCleaner.swift`. The exceptions are `AttachmentsTests`, which lives in `EMLParserTests.swift` because attachment selection lives in `EMLParser`, and `AttachmentBlockTests` in `MarkdownRendererTests.swift`, because the closing attachment block is the renderer's.
+- **One test file per source file**, named after it: `BodyCleanerTests.swift` covers `BodyCleaner.swift`. The exceptions are `AttachmentsTests` and `BodySelectionTests`, which live in `EMLParserTests.swift` because attachment and body selection live in `EMLParser`, and `AttachmentBlockTests` and `FrontmatterContractTests` in `MarkdownRendererTests.swift`, because the closing attachment block and the frontmatter's key set are the renderer's.
 - **Shared EML fixtures live in `EMLFixtures.swift`**, not in whichever suite happened to need one first.
 - **`Mail2mdTests.swift` is the acceptance suite** and the only one that leaves the process: each test launches the built binary and pins one thing a user can observe (the file that appears, an exit code, an exact stderr line, an empty stdout). Add to it when you change what the command *does*; leave parsing and rendering detail to the library suites, which are cheaper and say more precisely where a break is. Its subprocess plumbing lives in `CommandRunner.swift`, beside the suite for the same reason the fixtures do.
 - **Fixtures are inline multiline strings** with explicit `\r` line endings. Those are two-character escapes inside the literal, not real carriage returns, so reindenting them is safe and a careless search-and-replace is not.
 - **Never a real email.** Anonymize every address to `@example.com`, keep bodies neutral, and use no real names. This one has been broken before; see the checklist below for the one-line command that catches it.
-- Cover the shapes that actually break parsers: `multipart/alternative` with a boundary, quoted-printable with multi-byte `=XX` and soft breaks, base64, RFC 2047 encoded words, a non-UTF-8 charset.
+- Cover the shapes that actually break parsers: `multipart/alternative` with a boundary, quoted-printable with multi-byte `=XX` and soft breaks, base64, RFC 2047 encoded words, a non-UTF-8 charset, a `text/plain` file attached beside the body, and a body split around an attachment.
 
 ### Output and errors
 

@@ -10,8 +10,10 @@ import Foundation
 /// Renders an `EmailMessage` as Markdown with YAML frontmatter.
 ///
 /// Frontmatter follows the EMAIL note template
-/// (`created` / `from` / `to` / `via` / `subject` / `attachments`); the body is
-/// the plain mail text with no heading. `attachments` lists the mail's
+/// (`created` / `from` / `to` / `cc` / `via` / `subject` / `attachments`). Every
+/// key is written even when empty, so the key set is fixed: a header the mail
+/// lacks shows as an empty key, never as a missing one. The body is the plain
+/// mail text with no heading. `attachments` lists the mail's
 /// attachment parts (a YAML flow list of filenames, or empty scaffolding when
 /// there are none). `via` stays empty scaffolding, because a stateless single-message
 /// converter cannot populate a thread predecessor.
@@ -58,6 +60,7 @@ struct MarkdownRenderer {
         lines.append(self.field("created", message.date.map { self.timestamp($0) }, quoted: false))
         lines.append(self.field("from", message.from))
         lines.append(self.field("to", message.to))
+        lines.append(self.field("cc", message.cc))
         lines.append(self.field("via", nil))
         lines.append(self.field("subject", message.subject))
         lines.append(contentsOf: self.attachmentsField(message.attachments))

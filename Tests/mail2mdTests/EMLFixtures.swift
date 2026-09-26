@@ -310,3 +310,98 @@ let punctuationNameEML = """
     SGk=\r
     --b--\r
     """
+
+/// The shape of the mail that showed `cc` missing (2026-09-08): several
+/// recipients in `To` and in `Cc`, the `Cc` header folded onto a second line,
+/// and an RFC 2047-encoded display name in the Outlook order, surname first.
+let ccEML = """
+    From: Personalabteilung <hr@example.com>\r
+    To: Anton Fillmann <anton@example.com>, Jane Doe <jane@example.com>\r
+    Cc: =?utf-8?Q?M=C3=BCller_Anna?= <anna@example.com>,\r
+     Team Lead <lead@example.com>\r
+    Subject: Protokoll der Sitzung\r
+    Date: Mon, 07 Sep 2026 10:00:00 +0200\r
+    MIME-Version: 1.0\r
+    Content-Type: text/plain; charset=utf-8\r
+    \r
+    Guten Tag, anbei das Protokoll.\r
+    """
+
+/// A text file attached to an ordinary mail. It is `text/plain` just like the
+/// body, and it sits at the outer level while the body is nested one level
+/// deeper in a `multipart/alternative`: before v1.2.0 it became the body.
+let textAttachmentEML = """
+    From: HR <hr@example.com>\r
+    To: Anton Fillmann <anton@example.com>\r
+    Subject: Notizen\r
+    Date: Mon, 07 Sep 2026 10:00:00 +0200\r
+    MIME-Version: 1.0\r
+    Content-Type: multipart/mixed; boundary="outer"\r
+    \r
+    --outer\r
+    Content-Type: multipart/alternative; boundary="inner"\r
+    \r
+    --inner\r
+    Content-Type: text/plain; charset=utf-8\r
+    \r
+    Hallo Anton, die Notizen hängen an.\r
+    --inner\r
+    Content-Type: text/html; charset=utf-8\r
+    \r
+    <html><body><p>Hallo Anton, die Notizen hängen an.</p></body></html>\r
+    --inner--\r
+    --outer\r
+    Content-Type: text/plain; charset=utf-8; name="Notizen.txt"\r
+    Content-Disposition: attachment; filename="Notizen.txt"\r
+    \r
+    Inhalt der angehängten Datei.\r
+    --outer--\r
+    """
+
+/// The Apple Mail shape of a plain-text mail with a document placed in the
+/// middle of the text: the text arrives in two parts, one on either side of
+/// the attachment. Before v1.2.0 only the first part reached the note.
+let splitBodyEML = """
+    From: Anton Fillmann <anton@example.com>\r
+    To: Amt <amt@example.com>\r
+    Subject: Unterlagen\r
+    Date: Mon, 07 Sep 2026 10:00:00 +0200\r
+    MIME-Version: 1.0\r
+    Content-Type: multipart/mixed; boundary="b"\r
+    \r
+    --b\r
+    Content-Type: text/plain; charset=utf-8\r
+    \r
+    Guten Tag, hier das Formular:\r
+    --b\r
+    Content-Type: application/pdf\r
+    Content-Disposition: inline; filename="Formular.pdf"\r
+    Content-Transfer-Encoding: base64\r
+    \r
+    JVBERi0xLjQK\r
+    --b\r
+    Content-Type: text/plain; charset=utf-8\r
+    \r
+    Freundliche Grüsse\r
+    Anton Fillmann\r
+    --b--\r
+    """
+
+/// A mail that is nothing but an attachment, as a scanner sends it. Before
+/// v1.2.0 the raw MIME part, base64 and all, became the body.
+let attachmentOnlyEML = """
+    From: Scanner <scanner@example.com>\r
+    To: Anton Fillmann <anton@example.com>\r
+    Subject: Scan\r
+    Date: Mon, 07 Sep 2026 10:00:00 +0200\r
+    MIME-Version: 1.0\r
+    Content-Type: multipart/mixed; boundary="b"\r
+    \r
+    --b\r
+    Content-Type: application/pdf; name="Scan.pdf"\r
+    Content-Disposition: attachment; filename="Scan.pdf"\r
+    Content-Transfer-Encoding: base64\r
+    \r
+    JVBERi0xLjQK\r
+    --b--\r
+    """
