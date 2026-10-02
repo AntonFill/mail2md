@@ -263,6 +263,21 @@ struct Mail2mdTests {
         #expect(try command.read("kein-datum.md").contains("\ncreated:\n"))
     }
 
+    @Test func reportsInvisibleCharactersAndStillSucceeds() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(hiddenTextEML, named: "newsletter.eml")
+
+        let run = try command.run([input.path])
+
+        // Removing characters changes the text, so the run says so without
+        // being asked, and it names what it left in for a second look.
+        #expect(run.exitCode == 0)
+        #expect(run.standardOutput.isEmpty)
+        #expect(run.standardError == "mail2md: \(input.path): invisible characters: removed 2 (ZWSP 2), kept 1 (ZWJ 1)\n")
+        #expect(try command.read("newsletter.md").contains("subject: \"API versioning\""))
+    }
+
     // MARK: - Reporting itself
 
     @Test func reportsItsVersionOnStandardOutput() throws {

@@ -77,6 +77,12 @@ struct Mail2md: ParsableCommand {
             printIf(true, "mail2md: \(self.path): missing or unparsable Date header (created left empty)")
         }
 
+        // Removing characters changes what the note says, and what was kept may
+        // still hide something, so both are reported without being asked.
+        if message.invisibleCharacters.isEmpty == false {
+            printIf(true, "mail2md: \(self.path): \(message.invisibleCharacters.summary)")
+        }
+
         // Extraction is only planned here. The note is written first, so a
         // conflict aborts before any attachment file exists, but it already
         // links the attachments by the names the plan gives them.

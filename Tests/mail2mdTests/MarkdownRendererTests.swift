@@ -103,7 +103,8 @@ struct AttachmentBlockTests {
             timeZone: nil,
             messageID: nil,
             body: body,
-            attachments: attachments
+            attachments: attachments,
+            invisibleCharacters: InvisibleCharacters.Report()
         )
     }
 

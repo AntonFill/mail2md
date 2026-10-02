@@ -405,3 +405,21 @@ let attachmentOnlyEML = """
     JVBERi0xLjQK\r
     --b--\r
     """
+
+/// An HTML-only newsletter in the React Email shape: a hidden preview text
+/// with its zero-width filler, a zero-width space in the subject and in the
+/// body, a joiner between two letters, and a code block whose space is written
+/// the way Resend writes it. The invisible characters are escapes, so the
+/// fixture can be read.
+let hiddenTextEML = """
+    From: Newsletter <news@example.com>\r
+    To: Anton Fillmann <anton@example.com>\r
+    Subject: API\u{200B} versioning\r
+    Date: Tue, 29 Sep 2026 10:00:00 +0000\r
+    MIME-Version: 1.0\r
+    Content-Type: text/html; charset=utf-8\r
+    \r
+    <html><body><div style="display:none" data-skip-in-text="true">Preview text<div> \u{200C}\u{200B}\u{200D}\u{200E}\u{200F}\u{FEFF}</div></div>\r
+    <p>Hello\u{200B} there, it\u{200D}s new.</p>\r
+    <pre><code>curl\u{00A0}\u{200D}\u{200B}-i</code></pre></body></html>\r
+    """

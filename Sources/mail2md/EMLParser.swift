@@ -20,6 +20,10 @@ struct EmailMessage {
     let messageID: String?
     let body: String
     let attachments: [Attachment]  // attachment parts, in document order
+
+    /// What the invisible-character rule found in the headers and the body
+    /// together, for the run to report.
+    let invisibleCharacters: InvisibleCharacters.Report
 }
 
 // MARK: -
@@ -72,7 +76,8 @@ extension EmailMessage {
             timeZone: self.timeZone,
             messageID: self.messageID,
             body: self.body,
-            attachments: renamed
+            attachments: renamed,
+            invisibleCharacters: self.invisibleCharacters
         )
     }
 }
@@ -99,16 +104,34 @@ struct EMLParser {
         let body = self.extractBody(headers: headers, rawBody: rawBody)
         let parsedDate = headers["date"].flatMap { self.parseDate($0) }
 
+        // Every text the note shows passes the invisible-character rule, the
+        // headers as well as the body, and the findings add up to one report.
+        // The body goes through it before the cleaner, so a line the rule
+        // empties is collapsed with the other blank lines.
+        var report = InvisibleCharacters.Report()
+        let visible = { (text: String) -> String in
+            let cleaned = InvisibleCharacters.clean(text)
+            report.add(cleaned.report)
+            return cleaned.text
+        }
+
+        let from = headers["from"].map(decodeRFC2047Header).map(visible)
+        let to = headers["to"].map(decodeRFC2047Header).map(visible)
+        let cc = headers["cc"].map(decodeRFC2047Header).map(visible)
+        let subject = headers["subject"].map(decodeRFC2047Header).map(visible)
+        let cleanBody = BodyCleaner.clean(visible(body))
+
         return EmailMessage(
-            from: headers["from"].map(decodeRFC2047Header),
-            to: headers["to"].map(decodeRFC2047Header),
-            cc: headers["cc"].map(decodeRFC2047Header),
-            subject: headers["subject"].map(decodeRFC2047Header),
+            from: from,
+            to: to,
+            cc: cc,
+            subject: subject,
             date: parsedDate?.date,
             timeZone: parsedDate?.timeZone,
             messageID: headers["message-id"],
-            body: BodyCleaner.clean(body),
-            attachments: self.attachments(headers: headers, rawBody: rawBody)
+            body: cleanBody,
+            attachments: self.attachments(headers: headers, rawBody: rawBody),
+            invisibleCharacters: report
         )
     }
 }

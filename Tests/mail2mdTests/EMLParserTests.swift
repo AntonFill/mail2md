@@ -136,6 +136,40 @@ struct BodySelectionTests {
 }
 
 // MARK: -
+
+/// What a reader never sees stays out of the note, in the headers as in the
+/// body, and what is left in for a second look is counted.
+struct InvisibleTextTests {
+
+    @Test func dropsThePreviewTextAndItsFiller() {
+        let message = EMLParser().parse(hiddenTextEML)
+
+        #expect(message.body.contains("Preview text") == false)
+        #expect(message.body.unicodeScalars.contains { $0.value == 0x200C } == false)
+        #expect(message.body.hasPrefix("Hello there,"))
+    }
+
+    @Test func cleansTheSubjectAndTheBodyAlike() {
+        let message = EMLParser().parse(hiddenTextEML)
+
+        #expect(message.subject == "API versioning")
+        // One zero-width space each in subject and body; the joiner between
+        // two letters stays and is reported.
+        #expect(message.invisibleCharacters == InvisibleCharacters.Report(zeroWidthSpaces: 2, joiners: 1))
+    }
+
+    @Test func readsTheSpacesOfACodeBlockAsSpaces() {
+        let message = EMLParser().parse(hiddenTextEML)
+
+        #expect(message.body.hasSuffix("```\ncurl -i\n```"))
+    }
+
+    @Test func reportsNothingForAnOrdinaryMail() {
+        #expect(EMLParser().parse(simpleEML).invisibleCharacters.isEmpty)
+    }
+}
+
+// MARK: -
 struct AttachmentsTests {
 
     @Test func collectsAttachmentFilenamesAcrossMixedTree() {

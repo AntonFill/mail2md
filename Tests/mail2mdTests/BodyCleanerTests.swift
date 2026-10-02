@@ -55,4 +55,16 @@ struct BodyCleanerTests {
         let input = "Neue Zeile.\n\n> Zitierte Zeile.\n>> Tiefer zitiert."
         #expect(BodyCleaner.clean(input) == "Neue Zeile.\n\n> Zitierte Zeile.\n>> Tiefer zitiert.")
     }
+
+    @Test func leavesAFencedCodeBlockAsItIs() {
+        // Code keeps its blank lines and its spacing; only the text around
+        // the fence is cleaned.
+        let input = "Text.   \n\n\n\n```\ndef f():\n\n\n    return 1  \n```\n\n\n\nWeiter."
+        #expect(BodyCleaner.clean(input) == "Text.\n\n```\ndef f():\n\n\n    return 1  \n```\n\nWeiter.")
+    }
+
+    @Test func cleansOnAfterAFenceThatNeverCloses() {
+        // An unclosed fence is a stray line, not code.
+        #expect(BodyCleaner.clean("```\nZeile.\n\n\n\nNoch eine.") == "```\nZeile.\n\nNoch eine.")
+    }
 }
