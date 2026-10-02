@@ -41,6 +41,15 @@ struct HTMLToMarkdownTests {
         #expect(md == "A & B <tag>")
     }
 
+    /// Foundation's whitespace set holds the zero-width space, so trimming a
+    /// line with it would remove one at the edge before the invisible-character
+    /// rule can count it. The emitter trims spaces and nothing else.
+    @Test func leavesAZeroWidthSpaceAtTheEdgeOfALine() {
+        let html = "<div>\u{200B}Zeile eins\u{200B}</div><div>\u{200B}Zeile zwei\u{200B}</div>"
+
+        #expect(HTMLToMarkdown.convert(html) == "\u{200B}Zeile eins\u{200B}\n\u{200B}Zeile zwei\u{200B}")
+    }
+
     /// Outlook writes every web and mail address as a link whose text is the
     /// address itself. As a Markdown link it would stand there twice.
     @Test(arguments: [
@@ -100,6 +109,13 @@ struct BlockLayoutTests {
         #expect(HTMLToMarkdown.convert("<p>Zeile eins<br><br>Zeile zwei</p>") == "Zeile eins\n\nZeile zwei")
     }
 
+    /// Markdown shows one empty line however many stand in a row. In a quote
+    /// the cleaner cannot fold them afterwards, because a `>` line is not empty.
+    @Test func foldsThreeBreaksIntoOneEmptyLine() {
+        #expect(HTMLToMarkdown.convert("<p>Zeile eins<br><br><br>Zeile zwei</p>") == "Zeile eins\n\nZeile zwei")
+        #expect(HTMLToMarkdown.convert("<blockquote>Zeile eins<br><br><br>Zeile zwei</blockquote>") == "> Zeile eins\n>\n> Zeile zwei")
+    }
+
     @Test func readsAParagraphWithoutMarginsAsALine() {
         let html = "<p style=\"margin:0\">Zeile eins</p><p style=\"margin: 0px\">Zeile zwei</p>"
 
@@ -128,6 +144,18 @@ struct BlockLayoutTests {
         let html = paragraph + "Hi there,</p>" + paragraph + "Version 2026-04 is out.</p>"
 
         #expect(HTMLToMarkdown.convert(html) == "Hi there,\n\nVersion 2026-04 is out.")
+    }
+
+    /// Padding leaves its space on its own side only: a paragraph padded above
+    /// is a line toward the block below it, one padded below a line toward the
+    /// block above.
+    @Test func leavesSpaceOnlyOnTheSideThePaddingIsOn() {
+        let html = """
+            <div>Zeile eins</div><p style="margin:0;padding-top:0.5em">Oben gesperrt</p><div>Zeile zwei</div>\
+            <p style="margin:0;padding-bottom:0.5em">Unten gesperrt</p><div>Zeile drei</div>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "Zeile eins\n\nOben gesperrt\nZeile zwei\nUnten gesperrt\n\nZeile drei")
     }
 
     /// Outlook's empty line is a paragraph holding one `&nbsp;`, a character
@@ -297,6 +325,23 @@ struct TableTests {
         #expect(HTMLToMarkdown.convert(html) == "|  |  |\n|---|---|\n| A\\|B | Zeile eins<br>Zeile zwei |")
     }
 
+    /// A grid spaces its columns with an empty one. In a table of data that
+    /// column drops out, whether its cells are empty or hold a no-break space.
+    @Test func dropsAColumnThatIsEmptyInEveryRow() {
+        let html = """
+            <table><tr><td>Buchungsnummer:</td><td width="16">&nbsp;</td><td>M1234567</td></tr>\
+            <tr><td>Einfahrt:</td><td width="16"></td><td>01.10.2026 um 08:00 Uhr</td></tr></table>
+            """
+        let expected = """
+            |  |  |
+            |---|---|
+            | Buchungsnummer: | M1234567 |
+            | Einfahrt: | 01.10.2026 um 08:00 Uhr |
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
     /// Minified HTML has nothing between two cells, so taking a layout table
     /// apart must still keep them apart.
     @Test func takesALayoutTableApartCellByCell() {
@@ -307,7 +352,7 @@ struct TableTests {
 
     /// A logo beside a signature leaves an empty column once the image is
     /// gone, and a table of one column is layout.
-    @Test func dropsAColumnThatIsEmptyInEveryRow() {
+    @Test func takesALogoBesideASignatureForLayout() {
         let html = "<table><tr><td><img src=\"https://example.com/logo.png\"></td><td>Jane Doe<br>Personalabteilung</td></tr></table>"
 
         #expect(HTMLToMarkdown.convert(html) == "Jane Doe\nPersonalabteilung")
