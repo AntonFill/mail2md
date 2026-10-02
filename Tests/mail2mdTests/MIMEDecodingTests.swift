@@ -5,6 +5,7 @@
 //  Created by Anton Fillmann on 05.08.2026.
 //
 
+import Foundation
 import Testing
 @testable import mail2md
 
@@ -64,6 +65,15 @@ struct MIMEDecodingTests {
         let message = EMLParser().parse(eml)
 
         #expect(message.body == "Das kostet 10 €.")
+    }
+
+    /// A file read byte for byte keeps the bytes of a part sent as raw binary.
+    /// Taken back through UTF-8, every byte above ASCII would come out as two.
+    @Test func keepsTheBytesOfABinaryPartInAFileThatIsNotUTF8() throws {
+        let reading = try #require(EMLParser.reading(latin1AttachmentEML))
+        let parts = reading.parser.attachmentParts(from: reading.raw)
+
+        #expect(parts.map { decodeToBytes($0.entity) } == [Data([0xFF, 0xFE, 0xE4])])
     }
 
     @Test func convertsHTMLOnlyMailToMarkdown() {

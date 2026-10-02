@@ -11,6 +11,32 @@ import Foundation
 struct MIMEEntity {
     let headers: [String: String]
     let rawBody: String
+
+    /// How `rawBody` stands for the bytes of the file.
+    let source: SourceText
+
+    /// The body as the bytes it stood in the file.
+    var bodyBytes: [UInt8] {
+        switch self.source {
+        case .utf8:
+            return Array(self.rawBody.utf8)
+        case .bytes:
+            return self.rawBody.unicodeScalars.map { UInt8(truncatingIfNeeded: $0.value) }
+        }
+    }
+}
+
+/// How the text of a mail stands for the bytes of its file.
+enum SourceText: Equatable {
+    /// The file is UTF-8, so the text is the mail, and a string's UTF-8 is the
+    /// bytes it was read from.
+    case utf8
+
+    /// The file is not UTF-8, so it is read byte for byte: each byte becomes
+    /// the scalar of the same number, the way Latin-1 maps them, and the parse
+    /// keeps every one of them. `charset` is the one the mail declares for
+    /// its 8-bit bytes, used where nothing closer declares one, as in a header.
+    case bytes(charset: String.Encoding)
 }
 
 /// A parsed `Content-Type` header, e.g. `multipart/alternative; boundary="x"`.
@@ -117,13 +143,14 @@ func stringEncoding(for charset: String?) -> String.Encoding {
 ///
 /// Handles soft line breaks (`=` at end of line) and `=XX` hex escapes.
 /// In `isHeader` (RFC 2047 "Q") mode, `_` decodes to a space and soft line
-/// breaks do not apply.
-func quotedPrintableBytes(_ input: String, isHeader: Bool) -> [UInt8] {
+/// breaks do not apply. A raw byte beyond ASCII, which quoted-printable does
+/// not allow but some mailers send, passes through as it is.
+func quotedPrintableBytes(_ input: [UInt8], isHeader: Bool) -> [UInt8] {
     var out: [UInt8] = []
-    let lines = input.components(separatedBy: "\n")
+    let lines = input.split(separator: 0x0A, omittingEmptySubsequences: false)
 
     for (index, line) in lines.enumerated() {
-        let bytes = Array(line.utf8)
+        let bytes = Array(line)
         var i = 0
         var softBreak = false
 
@@ -165,10 +192,11 @@ func quotedPrintableBytes(_ input: String, isHeader: Bool) -> [UInt8] {
     return out
 }
 
-/// Decodes a quoted-printable body as text using the given encoding.
-func decodeQuotedPrintable(_ input: String, encoding: String.Encoding) -> String {
+/// Decodes a quoted-printable body as text using the given encoding, or nil
+/// when its bytes are not valid in that encoding.
+func decodeQuotedPrintable(_ input: [UInt8], encoding: String.Encoding) -> String? {
     let bytes = quotedPrintableBytes(input, isHeader: false)
-    return String(bytes: bytes, encoding: encoding) ?? input
+    return String(bytes: bytes, encoding: encoding)
 }
 
 /// Decodes a base64 body as text using the given encoding.
@@ -184,7 +212,7 @@ func decodeBase64(_ input: String, encoding: String.Encoding) -> String {
 /// encoding, for binary attachment extraction. Unlike `decodeLeaf`, this never
 /// routes the bytes through a text encoding: a `.png` or `.pdf` must survive
 /// verbatim. Unknown/absent encodings (7bit, 8bit, binary) yield the body's
-/// UTF-8 bytes, matching how the source was read.
+/// bytes as they stood in the file.
 func decodeToBytes(_ entity: MIMEEntity) -> Data {
     let encoding = (entity.headers["content-transfer-encoding"] ?? "")
         .trimmingCharacters(in: .whitespaces)
@@ -193,11 +221,11 @@ func decodeToBytes(_ entity: MIMEEntity) -> Data {
     switch encoding {
     case "base64":
         let cleaned = entity.rawBody.filter { $0.isWhitespace == false }
-        return Data(base64Encoded: cleaned) ?? Data(entity.rawBody.utf8)
+        return Data(base64Encoded: cleaned) ?? Data(entity.bodyBytes)
     case "quoted-printable":
-        return Data(quotedPrintableBytes(entity.rawBody, isHeader: false))
+        return Data(quotedPrintableBytes(entity.bodyBytes, isHeader: false))
     default:  // 7bit, 8bit, binary, or absent
-        return Data(entity.rawBody.utf8)
+        return Data(entity.bodyBytes)
     }
 }
 
@@ -226,7 +254,7 @@ func decodeRFC2047Header(_ input: String) -> String {
         if String(match.output.2).uppercased() == "B" {
             result += decodeBase64(text, encoding: encoding)
         } else {
-            result += String(bytes: quotedPrintableBytes(text, isHeader: true), encoding: encoding) ?? text
+            result += String(bytes: quotedPrintableBytes(Array(text.utf8), isHeader: true), encoding: encoding) ?? text
         }
 
         lastEnd = match.range.upperBound

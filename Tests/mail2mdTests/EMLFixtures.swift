@@ -5,6 +5,7 @@
 //  Created by Anton Fillmann on 05.08.2026.
 //
 
+import Foundation
 import Testing
 @testable import mail2md
 
@@ -423,3 +424,87 @@ let hiddenTextEML = """
     <p>Hello\u{200B} there, it\u{200D}s new.</p>\r
     <pre><code>curl\u{00A0}\u{200D}\u{200B}-i</code></pre></body></html>\r
     """
+
+// MARK: - Files that are not UTF-8
+
+/// The bytes of a text as Latin-1 writes it, one byte per character, the way
+/// an old mail program stored a mail. Every character stands for its byte, so
+/// a fixture can spell out bytes that no UTF-8 string holds.
+func latin1(_ text: String) -> Data {
+    return Data(text.unicodeScalars.map { UInt8(truncatingIfNeeded: $0.value) })
+}
+
+/// The shape of an old booking confirmation: one plain part in ISO-8859-1,
+/// transferred as 8bit, with raw Latin-1 bytes in the body and in the subject.
+/// The file is not UTF-8, so it can only be read in the charset it declares.
+let latin1EML = latin1("""
+    From: Kundenservice <service@example.com>\r
+    To: Anton Fillmann <anton@example.com>\r
+    Subject: Freischaltung Ihrer Bestellung bestätigt\r
+    Date: Tue, 02 Aug 2016 10:00:00 +0200\r
+    MIME-Version: 1.0\r
+    Content-Type: text/plain; charset=iso-8859-1\r
+    Content-Transfer-Encoding: 8BIT\r
+    \r
+    Sehr geehrter Herr Fillmann,\r
+    \r
+    Ihr Ticket ist freigeschaltet und gültig ab Montag.\r
+    \r
+    Freundliche Grüße\r
+    """)
+
+/// The shape of a reply from an insurer's web form: an alternative whose plain
+/// part declares ISO-8859-15 and quoted-printable, yet carries two umlauts as
+/// raw bytes beside an escaped one. `\u{00A4}` is the raw byte A4, the euro
+/// sign in ISO-8859-15 and the currency sign in Latin-1.
+let latin9QuotedPrintableEML = latin1("""
+    From: Kundenservice <service@example.com>\r
+    To: Anton Fillmann <anton@example.com>\r
+    Subject: Ihre Anfrage\r
+    Date: Fri, 01 Mar 2024 19:30:00 +0100\r
+    MIME-Version: 1.0\r
+    Content-Type: multipart/alternative; boundary="b"\r
+    \r
+    --b\r
+    Content-Type: text/plain; charset=ISO-8859-15\r
+    Content-Transfer-Encoding: quoted-printable\r
+    \r
+    Grüße aus M=FCnchen, der Beitrag beträgt 12 \u{00A4} im Monat.\r
+    --b\r
+    Content-Type: text/html; charset=US-ASCII\r
+    Content-Transfer-Encoding: quoted-printable\r
+    \r
+    <p>Ihre Anfrage</p>\r
+    --b--\r
+    """)
+
+/// A header in UTF-8, as a current server writes one, above a body still in
+/// Latin-1: the file as a whole is neither.
+let utf8HeaderLatin1BodyEML = Data("""
+    From: Jörg Müller <joerg@example.com>\r
+    Subject: Grüße aus Zürich\r
+    Content-Type: text/plain; charset=iso-8859-1\r
+    Content-Transfer-Encoding: 8bit\r
+    \r
+
+    """.utf8) + latin1("Schöne Grüße\r\n")
+
+/// A Latin-1 mail with a file attached as raw binary bytes, so the bytes reach
+/// the parser only as they stood in the file.
+let latin1AttachmentEML = latin1("""
+    Subject: Daten\r
+    Content-Type: multipart/mixed; boundary="b"\r
+    \r
+    --b\r
+    Content-Type: text/plain; charset=iso-8859-1\r
+    Content-Transfer-Encoding: 8bit\r
+    \r
+    Grüße\r
+    --b\r
+    Content-Type: application/octet-stream; name="daten.bin"\r
+    Content-Disposition: attachment; filename="daten.bin"\r
+    Content-Transfer-Encoding: binary\r
+    \r
+    \u{00FF}\u{00FE}\u{00E4}\r
+    --b--\r
+    """)

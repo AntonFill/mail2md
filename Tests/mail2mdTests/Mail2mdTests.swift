@@ -214,16 +214,32 @@ struct Mail2mdTests {
     @Test func undecodableInputFailsWithoutWritingMarkdown() throws {
         let command = try CommandRunner()
         defer { command.removeWorkspace() }
-        // `From: <0xFF>`: the byte is not valid UTF-8, so the file cannot be read
-        // as text at all.
+        // `From: <0xFF>`: the byte is not valid UTF-8, and the file declares no
+        // charset it could be read in instead.
         let input = try command.write(Data([0x46, 0x72, 0x6F, 0x6D, 0x3A, 0x20, 0xFF, 0x0D, 0x0A]), named: "broken.eml")
 
         let run = try command.run([input.path])
 
         #expect(run.exitCode == 1)
         #expect(run.standardOutput.isEmpty)
-        #expect(run.standardError == "mail2md: \(input.path): not valid UTF-8 text\n")
+        #expect(run.standardError == "mail2md: \(input.path): not valid UTF-8 text, nor in a charset it declares\n")
         #expect(command.exists("broken.md") == false)
+    }
+
+    @Test func convertsAFileThatIsNotUTF8InTheCharsetItDeclares() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(latin1EML, named: "bestellung.eml")
+
+        let run = try command.run([input.path])
+
+        // Until v1.2.0 an old mail in Latin-1 was refused as not valid UTF-8.
+        #expect(run.exitCode == 0)
+        #expect(run.standardOutput.isEmpty)
+        #expect(run.standardError.isEmpty)
+        let note = try command.read("bestellung.md")
+        #expect(note.contains("subject: \"Freischaltung Ihrer Bestellung bestätigt\""))
+        #expect(note.contains("\nFreundliche Grüße"))
     }
 
     @Test func unreadableInputKeepsFoundationsWordingForVerbose() throws {

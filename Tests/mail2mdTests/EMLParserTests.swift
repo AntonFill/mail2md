@@ -170,6 +170,80 @@ struct InvisibleTextTests {
 }
 
 // MARK: -
+
+/// A file that is not UTF-8 is read byte for byte, every part in the charset
+/// it declares. A UTF-8 file is read as it always was.
+struct CharsetFallbackTests {
+
+    @Test func readsAUTF8FileAsText() throws {
+        let reading = try #require(EMLParser.reading(Data(simpleEML.utf8)))
+
+        #expect(reading.parser.source == .utf8)
+        #expect(reading.raw == simpleEML)
+    }
+
+    @Test func readsALatin1FileInTheCharsetItDeclares() throws {
+        let reading = try #require(EMLParser.reading(latin1EML))
+        let message = reading.parser.parse(reading.raw)
+
+        #expect(message.subject == "Freischaltung Ihrer Bestellung bestätigt")
+        #expect(message.body == "Sehr geehrter Herr Fillmann,\n\nIhr Ticket ist freigeschaltet und gültig ab Montag.\n\nFreundliche Grüße")
+    }
+
+    /// Quoted-printable allows no raw bytes beyond ASCII, but an insurer's web
+    /// form sends them. They are read in the part's charset like the escaped
+    /// one, and byte A4 is the euro sign there, not Latin-1's currency sign.
+    @Test func readsRawBytesInAQuotedPrintablePartInItsCharset() throws {
+        let reading = try #require(EMLParser.reading(latin9QuotedPrintableEML))
+        let message = reading.parser.parse(reading.raw)
+
+        #expect(message.body == "Grüße aus München, der Beitrag beträgt 12 € im Monat.")
+    }
+
+    /// Each part is read in the charset it declares itself, not in the first
+    /// one the mail declares: byte A4 in the second part is the euro sign.
+    @Test func readsEachPartInItsOwnCharset() throws {
+        let eml = latin1("""
+            Content-Type: multipart/mixed; boundary="b"\r
+            \r
+            --b\r
+            Content-Type: text/plain; charset=iso-8859-1\r
+            Content-Transfer-Encoding: 8bit\r
+            \r
+            Grüße\r
+            --b\r
+            Content-Type: text/plain; charset=iso-8859-15\r
+            Content-Transfer-Encoding: 8bit\r
+            \r
+            12 \u{00A4}\r
+            --b--\r
+            """)
+        let reading = try #require(EMLParser.reading(eml))
+
+        #expect(reading.parser.parse(reading.raw).body == "Grüße\n\n12 €")
+    }
+
+    @Test func readsAHeaderInUTF8AboveABodyInLatin1() throws {
+        let reading = try #require(EMLParser.reading(utf8HeaderLatin1BodyEML))
+        let message = reading.parser.parse(reading.raw)
+
+        #expect(message.from == "Jörg Müller <joerg@example.com>")
+        #expect(message.subject == "Grüße aus Zürich")
+        #expect(message.body == "Schöne Grüße")
+    }
+
+    /// Without a charset that could stand for its bytes nothing says what they
+    /// mean, so the file is refused rather than guessed at. UTF-8 is no such
+    /// charset for a file that is not UTF-8.
+    @Test(arguments: ["", "Content-Type: text/plain; charset=utf-8\r\n"])
+    func refusesAFileThatDeclaresNoCharsetForItsBytes(contentType: String) {
+        let data = latin1("Subject: Grüße\r\n\(contentType)\r\nSchöne Grüße\r\n")
+
+        #expect(EMLParser.reading(data) == nil)
+    }
+}
+
+// MARK: -
 struct AttachmentsTests {
 
     @Test func collectsAttachmentFilenamesAcrossMixedTree() {

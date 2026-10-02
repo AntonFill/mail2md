@@ -96,7 +96,9 @@ Bodies pass through a lossless cleanup: angle-bracket duplicates of mail and web
 
 All diagnostics, including `--verbose` progress, go to stderr. The product is the Markdown file, so stdout carries only genuine data (today just `--version`) and `2>/dev/null` silences the tool without hiding anything else.
 
-An input that cannot be converted exits non-zero and says why in Unix form, `mail2md: <path>: <message>`: a missing file, a directory, a file that cannot be read, or one whose bytes are not valid UTF-8. Nothing is written in those cases, so the tool is safe to use in a pipeline that checks the exit code.
+A mail file that is not UTF-8, as old mail in Latin-1 often is, is read in the charsets it declares, each part in its own.
+
+An input that cannot be converted exits non-zero and says why in Unix form, `mail2md: <path>: <message>`: a missing file, a directory, a file that cannot be read, or one whose bytes are neither valid UTF-8 nor in a charset the file declares. Nothing is written in those cases, so the tool is safe to use in a pipeline that checks the exit code.
 
 JSON/text output and stdin/stdout piping are on the roadmap.
 

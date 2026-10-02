@@ -67,8 +67,8 @@ struct Mail2md: ParsableCommand {
             throw ExitCode.failure
         }
 
-        let raw = try self.read(inputURL)
-        let message = EMLParser().parse(raw)
+        let (parser, raw) = try self.read(inputURL)
+        let message = parser.parse(raw)
         let outputPath = self.output ?? inputURL.deletingPathExtension().appendingPathExtension("md").path
 
         // An empty `created` is silent data loss in the vault: warn unconditionally
@@ -86,7 +86,7 @@ struct Mail2md: ParsableCommand {
         // Extraction is only planned here. The note is written first, so a
         // conflict aborts before any attachment file exists, but it already
         // links the attachments by the names the plan gives them.
-        let extraction = try self.planExtraction(from: raw, date: message.date, outputPath: outputPath)
+        let extraction = try self.planExtraction(from: raw, parser: parser, date: message.date, outputPath: outputPath)
         let noted = extraction.map { message.replacingAttachments(withNames: $0.names) } ?? message
 
         // One .eml converts to exactly one Markdown file. A quoted reply chain
@@ -113,14 +113,15 @@ struct Mail2md: ParsableCommand {
         }
     }
 
-    /// Reads the input file as UTF-8 text.
+    /// Reads the input file as a mail: as UTF-8 text when it is, otherwise byte
+    /// for byte in the charsets it declares (`EMLParser.reading`).
     ///
     /// Foundation's own failure is unusable as CLI output: it names no path, it is
     /// localized, and it does not follow this tool's `mail2md: <path>: <message>`
     /// shape. So both ways this can fail are translated into that shape, and the
     /// underlying reason stays available under `--verbose` (v1.0.2, found by the
     /// acceptance tests: no library test can see what the command prints).
-    private func read(_ url: URL) throws -> String {
+    private func read(_ url: URL) throws -> (parser: EMLParser, raw: String) {
         let data: Data
 
         do {
@@ -132,12 +133,15 @@ struct Mail2md: ParsableCommand {
             throw ExitCode.failure
         }
 
-        guard let text = String(data: data, encoding: .utf8) else {
-            printIf(true, "mail2md: \(self.path): not valid UTF-8 text")
+        guard let reading = EMLParser.reading(data) else {
+            printIf(true, "mail2md: \(self.path): not valid UTF-8 text, nor in a charset it declares")
             throw ExitCode.failure
         }
+        if reading.parser.source != .utf8 {
+            printIf(self.verbose, "mail2md: \(self.path): not UTF-8, read byte for byte in the charsets it declares")
+        }
 
-        return text
+        return reading
     }
 
     /// Plans the attachment extraction, or nil when none was asked for.
@@ -146,12 +150,12 @@ struct Mail2md: ParsableCommand {
     /// directory is meaningless without it. Throws when the pattern names a
     /// placeholder that does not exist, since that would otherwise end up
     /// verbatim in a filename.
-    private func planExtraction(from raw: String, date: Date?, outputPath: String) throws -> Extraction? {
+    private func planExtraction(from raw: String, parser: EMLParser, date: Date?, outputPath: String) throws -> Extraction? {
         guard self.extractAttachments || self.attachmentsDir != nil || self.attachmentName != nil else {
             return nil
         }
 
-        let parts = EMLParser().attachmentParts(from: raw)
+        let parts = parser.attachmentParts(from: raw)
         let directory = self.attachmentsDir.map { URL(fileURLWithPath: $0) } ?? URL(fileURLWithPath: outputPath).deletingLastPathComponent()
         let extractor = AttachmentExtractor(directory: directory, naming: try self.naming(for: date))
 

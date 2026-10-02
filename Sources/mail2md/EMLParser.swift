@@ -95,8 +95,16 @@ struct AttachmentPart {
 ///
 /// Scope: single-part and multipart messages (one form of an `alternative`,
 /// every body part of any other container, in order); quoted-printable and
-/// base64 transfer encodings; RFC 2047 encoded-word headers.
+/// base64 transfer encodings; RFC 2047 encoded-word headers; a file that is
+/// not UTF-8, read byte for byte in the charsets it declares (`reading`).
 struct EMLParser {
+
+    /// How the text this parser is given stands for the bytes of the file.
+    let source: SourceText
+
+    init(source: SourceText = .utf8) {
+        self.source = source
+    }
 
     func parse(_ raw: String) -> EmailMessage {
         let (headerBlock, rawBody) = self.splitHeadersAndBody(raw)
@@ -170,7 +178,7 @@ extension EMLParser {
         let contentType = parseContentType(headers["content-type"])
 
         guard contentType.mediaType.hasPrefix("multipart/") else {
-            return self.renderedText(MIMEEntity(headers: headers, rawBody: rawBody))
+            return self.renderedText(MIMEEntity(headers: headers, rawBody: rawBody, source: self.source))
         }
 
         guard let boundary = contentType.boundary else {
@@ -358,16 +366,45 @@ extension EMLParser {
         let encoding = (entity.headers["content-transfer-encoding"] ?? "")
             .trimmingCharacters(in: .whitespaces)
             .lowercased()
-        let charset = stringEncoding(for: parseContentType(entity.headers["content-type"]).charset)
+        let declaredCharset = parseContentType(entity.headers["content-type"]).charset
+        let charset = stringEncoding(for: declaredCharset)
 
         switch encoding {
         case "quoted-printable":
-            return decodeQuotedPrintable(entity.rawBody, encoding: charset)
+            return decodeQuotedPrintable(entity.bodyBytes, encoding: charset) ?? entity.rawBody
         case "base64":
             return decodeBase64(entity.rawBody, encoding: charset)
         default:  // 7bit, 8bit, binary, or absent
-            return entity.rawBody
+            return self.decodedRaw(entity.rawBody, declaredCharset: declaredCharset)
         }
+    }
+
+    /// Raw 8-bit text as what it says. In a UTF-8 file it already is. In a
+    /// file read byte for byte, its bytes are read as UTF-8 when they are UTF-8,
+    /// which is how a current server writes a header, else in the charset
+    /// declared for them, else in the one the mail declares. Text none of them
+    /// can read stays as read, the way a failed transfer decoding shows its input.
+    func decodedRaw(_ raw: String, declaredCharset: String?) -> String {
+        guard
+            case .bytes(let mailCharset) = self.source,
+            raw.unicodeScalars.contains(where: { $0.value > 0x7F })
+        else {
+            return raw
+        }
+
+        var encodings: [String.Encoding] = [.utf8]
+        if let declaredCharset {
+            encodings.append(stringEncoding(for: declaredCharset))
+        }
+        encodings.append(mailCharset)
+
+        let bytes = raw.unicodeScalars.map { UInt8(truncatingIfNeeded: $0.value) }
+        for encoding in encodings {
+            if let text = String(bytes: bytes, encoding: encoding) {
+                return text
+            }
+        }
+        return raw
     }
 
     /// Splits a multipart body into its parts, dropping preamble and epilogue.
@@ -403,7 +440,68 @@ extension EMLParser {
     /// Parses one MIME part into headers and its still-encoded body.
     func parseEntity(_ raw: String) -> MIMEEntity {
         let (headerBlock, body) = self.splitHeadersAndBody(raw)
-        return MIMEEntity(headers: self.parseHeaders(headerBlock), rawBody: body)
+        return MIMEEntity(headers: self.parseHeaders(headerBlock), rawBody: body, source: self.source)
+    }
+}
+
+// MARK: - Reading a file
+extension EMLParser {
+
+    /// The text of a mail file, with the parser that reads it.
+    ///
+    /// A UTF-8 file is read as text, as it always was. A file that is not is
+    /// read byte for byte, so each part can still be decoded in the charset it
+    /// declares: an old mail in Latin-1 sends its body as raw 8-bit bytes, and
+    /// some mailers put raw bytes even into a quoted-printable part. Nil when
+    /// the file is not UTF-8 and declares no charset that could stand for its
+    /// bytes, since then nothing says what they mean.
+    static func reading(_ data: Data) -> (parser: EMLParser, raw: String)? {
+        if let text = String(data: data, encoding: .utf8) {
+            return (EMLParser(), text)
+        }
+
+        // Latin-1 maps each byte to the scalar of the same number, so this
+        // keeps every byte and cannot fail.
+        guard let text = String(data: data, encoding: .isoLatin1) else {
+            return nil
+        }
+
+        let probe = EMLParser(source: .bytes(charset: .isoLatin1))
+        let (headerBlock, rawBody) = probe.splitHeadersAndBody(text)
+        guard let charset = probe.charsetForRawBytes(headers: probe.parseHeaders(headerBlock), rawBody: rawBody) else {
+            return nil
+        }
+
+        return (EMLParser(source: .bytes(charset: charset)), text)
+    }
+
+    /// The charset a file that is not UTF-8 is read in where nothing closer
+    /// declares one: the first the mail declares, in document order, that can
+    /// stand for bytes beyond ASCII. UTF-8 cannot, or the file would have been
+    /// read as UTF-8, and ASCII cannot either. Unknown names read as UTF-8 and
+    /// drop out with it.
+    func charsetForRawBytes(headers: [String: String], rawBody: String) -> String.Encoding? {
+        let contentType = parseContentType(headers["content-type"])
+        if let charset = contentType.charset {
+            let encoding = stringEncoding(for: charset)
+            if encoding != .utf8, encoding != .ascii {
+                return encoding
+            }
+        }
+        guard
+            contentType.mediaType.hasPrefix("multipart/"),
+            let boundary = contentType.boundary
+        else {
+            return nil
+        }
+
+        let parts = self.splitParts(rawBody, boundary: boundary).map { self.parseEntity($0) }
+        for part in parts {
+            if let encoding = self.charsetForRawBytes(headers: part.headers, rawBody: part.rawBody) {
+                return encoding
+            }
+        }
+        return nil
     }
 }
 
@@ -425,6 +523,8 @@ extension EMLParser {
 
     /// Parses the header block into a dictionary with lowercased header names.
     /// Folded headers (continuation lines starting with whitespace) are unfolded.
+    /// Raw 8-bit bytes in a value, against RFC 5322 but common in old mail, are
+    /// decoded like any other raw text (`decodedRaw`).
     func parseHeaders(_ headerBlock: String) -> [String: String] {
         var headers: [String: String] = [:]
         var currentName: String?
@@ -449,7 +549,7 @@ extension EMLParser {
             currentName = name
         }
 
-        return headers
+        return headers.mapValues { self.decodedRaw($0, declaredCharset: nil) }
     }
 
     /// Numeric offsets for the obsolete alphabetic zone names of RFC 5322 §4.3.
