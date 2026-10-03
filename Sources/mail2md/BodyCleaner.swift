@@ -54,15 +54,19 @@ extension BodyCleaner {
     fileprivate static func tidy(_ lines: [String]) -> [String] {
         var text = lines.joined(separator: "\n")
 
-        // A plain token immediately followed by its own `mailto:` wrapper, e.g.
-        // `foo@example.com<mailto:foo@example.com>` and the nested attribution
-        // form `<foo@example.com<mailto:foo@example.com>>`, collapses to the
-        // plain token.
-        text = text.replacing(/([^\s<>]+)<mailto:\1>/) { $0.1 }
-
-        // Any remaining standalone `<mailto:addr>` is unwrapped to the address,
-        // so the address survives even when it appears only wrapped.
-        text = text.replacing(/<mailto:([^\s<>]+)>/) { $0.1 }
+        // A `mailto:` wrapper right after its own plain twin collapses onto the
+        // twin, e.g. `foo@example.com<mailto:foo@example.com>` and the nested
+        // attribution form `<foo@example.com<mailto:foo@example.com>>`. Any
+        // other is unwrapped to the address, so the address survives even when
+        // it appears only wrapped. One pass from the wrapper: the backreference
+        // `([^\s<>]+)<mailto:\1>` it replaces started at every character of a
+        // long token and backtracked through all of it, 1.3 s for a mail with
+        // a few links of 1'000 characters (measured 2026-10-03).
+        let wrapped = text
+        text = wrapped.replacing(/<mailto:([^\s<>]+)>/) { wrapper in
+            let followsTwin = wrapped[..<wrapper.range.lowerBound].hasSuffix(wrapper.1)
+            return followsTwin ? "" : wrapper.1
+        }
 
         // A URL immediately followed by its own angle-wrapped duplicate.
         text = text.replacing(/(https?:\/\/[^\s<>]+)<\1>/) { $0.1 }

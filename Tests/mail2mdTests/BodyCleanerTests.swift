@@ -27,6 +27,29 @@ struct BodyCleanerTests {
                 == "Schreiben Sie an info@example.com")
     }
 
+    @Test func collapsesMailtoDuplicateEndingALongerToken() {
+        // The twin need not be a word of its own: a label written straight
+        // before the address still collapses onto it.
+        #expect(BodyCleaner.clean("E-Mail:hr@example.com<mailto:hr@example.com>") == "E-Mail:hr@example.com")
+    }
+
+    @Test func cleansALongLinkInLinearTime() {
+        // A backreference regex started at every character of a long token
+        // and backtracked through all of it: 3 s for this link alone, 1.3 s
+        // for a real mail with a few links of 1'000 characters (measured
+        // 2026-10-03). The pass from the wrapper takes under a millisecond.
+        let link = "https://example.com/?q=" + String(repeating: "a", count: 4_000)
+        let body = "Hier der Link: \(link)\nKontakt: hr@example.com<mailto:hr@example.com>"
+
+        var cleaned = ""
+        let elapsed = ContinuousClock().measure {
+            cleaned = BodyCleaner.clean(body)
+        }
+
+        #expect(cleaned == "Hier der Link: \(link)\nKontakt: hr@example.com")
+        #expect(elapsed < .seconds(1))
+    }
+
     @Test func collapsesDuplicateURL() {
         #expect(BodyCleaner.clean("https://example.com/x<https://example.com/x>") == "https://example.com/x")
     }
