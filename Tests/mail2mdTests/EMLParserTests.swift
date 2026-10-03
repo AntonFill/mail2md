@@ -232,10 +232,29 @@ struct CharsetFallbackTests {
         #expect(message.body == "Schöne Grüße")
     }
 
+    /// Raw bytes declared ISO-8859-1 are read as windows-1252 too, in the
+    /// header as in the body: bytes 84 and 93 are „ and “ there.
+    @Test func readsRawLatin1BytesAsWindows1252() throws {
+        let eml = latin1("""
+            Subject: \u{84}Wie neu\u{93}\r
+            Content-Type: text/plain; charset=iso-8859-1\r
+            Content-Transfer-Encoding: 8bit\r
+            \r
+            Das Gerät läuft wieder \u{84}wie neu\u{93}.\r
+            """)
+        let reading = try #require(EMLParser.reading(eml))
+        let message = reading.parser.parse(reading.raw)
+
+        #expect(message.subject == "„Wie neu“")
+        #expect(message.body == "Das Gerät läuft wieder „wie neu“.")
+    }
+
     /// Without a charset that could stand for its bytes nothing says what they
     /// mean, so the file is refused rather than guessed at. UTF-8 is no such
-    /// charset for a file that is not UTF-8.
-    @Test(arguments: ["", "Content-Type: text/plain; charset=utf-8\r\n"])
+    /// charset for a file that is not UTF-8, and ASCII declares that there are
+    /// no such bytes: a part that sends them anyway is read as windows-1252,
+    /// but says nothing about the bytes elsewhere in the mail.
+    @Test(arguments: ["", "Content-Type: text/plain; charset=utf-8\r\n", "Content-Type: text/plain; charset=us-ascii\r\n"])
     func refusesAFileThatDeclaresNoCharsetForItsBytes(contentType: String) {
         let data = latin1("Subject: Grüße\r\n\(contentType)\r\nSchöne Grüße\r\n")
 

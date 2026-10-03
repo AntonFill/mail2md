@@ -86,3 +86,82 @@ struct MIMEDecodingTests {
         #expect(message.body.contains("<") == false)
     }
 }
+
+// MARK: -
+
+/// ISO-8859-1, ASCII and windows-1252 are read as windows-1252, the way a mail
+/// program reads them. A ticket system declared ISO-8859-1 and still sent „
+/// and “ as the windows-1252 bytes 84 and 93, which ISO-8859-1 itself reads as
+/// invisible control characters (five archive mails, found 2026-10-02).
+struct Windows1252Tests {
+
+    @Test func readsQuotationMarksInAQuotedPrintablePart() {
+        let eml = """
+            Subject: Status\r
+            Content-Type: text/plain; charset=iso-8859-1\r
+            Content-Transfer-Encoding: quoted-printable\r
+            \r
+            Das Ger=E4t l=E4uft wieder =84wie neu=93.\r
+            """
+
+        #expect(EMLParser().parse(eml).body == "Das Gerät läuft wieder „wie neu“.")
+    }
+
+    @Test func readsThemInABase64Part() {
+        let eml = """
+            Subject: Status\r
+            Content-Type: text/plain; charset=iso-8859-1\r
+            Content-Transfer-Encoding: base64\r
+            \r
+            RGFzIEdlcuR0IGzkdWZ0IHdpZWRlciCEd2llIG5ldZMu\r
+            """
+
+        #expect(EMLParser().parse(eml).body == "Das Gerät läuft wieder „wie neu“.")
+    }
+
+    @Test func readsThemInAnEncodedWord() {
+        let eml = """
+            Subject: =?iso-8859-1?Q?=84Wie_neu=93?=\r
+            \r
+            Hallo\r
+            """
+
+        #expect(EMLParser().parse(eml).subject == "„Wie neu“")
+    }
+
+    /// ASCII ends at 7F, yet a mailer that declares it may still send bytes
+    /// beyond. Refused, such a quoted-printable part used to appear as its raw
+    /// escapes.
+    @Test func readsBytesBeyondASCIIInAPartThatDeclaresASCII() {
+        let eml = """
+            Subject: Status\r
+            Content-Type: text/plain; charset=us-ascii\r
+            Content-Transfer-Encoding: quoted-printable\r
+            \r
+            Sch=F6ne Gr=FC=DFe\r
+            """
+
+        #expect(EMLParser().parse(eml).body == "Schöne Grüße")
+    }
+
+    /// Foundation refuses the whole text at any of the five bytes windows-1252
+    /// leaves unassigned. The standard reads each as the control character of
+    /// the same number, and the text around it stays readable.
+    @Test(arguments: [String.Encoding.isoLatin1, .windowsCP1252])
+    func readsTheFiveUnassignedBytesAsControlCharacters(encoding: String.Encoding) {
+        let bytes: [UInt8] = [0x84, 0x81, 0x8D, 0x8F, 0x90, 0x9D, 0x93]
+
+        #expect(decodeText(bytes, encoding: encoding) == "„\u{81}\u{8D}\u{8F}\u{90}\u{9D}“")
+    }
+
+    /// Foundation's windows-1252 reads every byte the encoding assigns, and it
+    /// does so without the table, so no slip in the table can hide.
+    @Test func agreesWithFoundationOnEveryByteTheEncodingAssigns() {
+        let unassigned: Set<UInt8> = [0x81, 0x8D, 0x8F, 0x90, 0x9D]
+        let assigned = (UInt8.min...UInt8.max).filter { unassigned.contains($0) == false }
+        let differing = assigned.filter { decodeText([$0], encoding: .windowsCP1252) != String(bytes: [$0], encoding: .windowsCP1252) }
+
+        #expect(assigned.count == 251)
+        #expect(differing.isEmpty)
+    }
+}

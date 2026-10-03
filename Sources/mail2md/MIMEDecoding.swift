@@ -122,8 +122,12 @@ func parseContentDisposition(_ raw: String?) -> (type: String, filename: String?
     return (type, parameters["filename"].map(decodeRFC2047Header))
 }
 
+// MARK: - Charsets
+
 /// Maps a MIME charset label to a `String.Encoding` via CoreFoundation's
 /// IANA charset registry. Falls back to UTF-8 for absent or unknown labels.
+/// This is the encoding the label declares; how text in it is read is up to
+/// `decodeText`.
 func stringEncoding(for charset: String?) -> String.Encoding {
     guard let charset, charset.isEmpty == false else {
         return .utf8
@@ -136,6 +140,52 @@ func stringEncoding(for charset: String?) -> String.Encoding {
 
     return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEncoding))
 }
+
+/// Decodes text in the encoding its charset declares, the way a mail program
+/// reads it, or nil when the bytes are not valid in that encoding.
+///
+/// ISO-8859-1, ASCII and windows-1252 are all read as windows-1252, which is
+/// what the WHATWG Encoding Standard makes of their labels and so what a mail
+/// program built on it shows. Mail declared ISO-8859-1 is often written in
+/// windows-1252: a ticket system still sent „ and “ that way in 2024, as the
+/// bytes 84 and 93, which ISO-8859-1 itself reads as invisible control
+/// characters. Foundation's windows-1252 is no help here, because it refuses
+/// the whole text at any of the five bytes the encoding leaves unassigned.
+func decodeText(_ bytes: [UInt8], encoding: String.Encoding) -> String? {
+    switch encoding {
+    case .isoLatin1, .ascii, .windowsCP1252:
+        return windows1252Text(bytes)
+    default:
+        return String(bytes: bytes, encoding: encoding)
+    }
+}
+
+/// Text in windows-1252 as the WHATWG Encoding Standard reads it. Every byte
+/// stands for one character, so it cannot fail.
+private func windows1252Text(_ bytes: [UInt8]) -> String {
+    var scalars = String.UnicodeScalarView()
+    for byte in bytes {
+        switch byte {
+        case 0x80...0x9F:
+            scalars.append(windows1252Block[Int(byte - 0x80)])
+        default:
+            scalars.append(Unicode.Scalar(byte))
+        }
+    }
+    return String(scalars)
+}
+
+/// What windows-1252 puts on the bytes 80 to 9F, eight to a row, as the
+/// standard's index lists it. Every other byte is the code point of the same
+/// number, as in Latin-1, and so are the five the encoding leaves unassigned
+/// (81, 8D, 8F, 90, 9D): the standard reads them as the control characters
+/// there.
+private let windows1252Block: [Unicode.Scalar] = [
+    "\u{20AC}", "\u{0081}", "\u{201A}", "\u{0192}", "\u{201E}", "\u{2026}", "\u{2020}", "\u{2021}",
+    "\u{02C6}", "\u{2030}", "\u{0160}", "\u{2039}", "\u{0152}", "\u{008D}", "\u{017D}", "\u{008F}",
+    "\u{0090}", "\u{2018}", "\u{2019}", "\u{201C}", "\u{201D}", "\u{2022}", "\u{2013}", "\u{2014}",
+    "\u{02DC}", "\u{2122}", "\u{0161}", "\u{203A}", "\u{0153}", "\u{009D}", "\u{017E}", "\u{0178}",
+]
 
 // MARK: - Transfer encodings
 
@@ -196,7 +246,7 @@ func quotedPrintableBytes(_ input: [UInt8], isHeader: Bool) -> [UInt8] {
 /// when its bytes are not valid in that encoding.
 func decodeQuotedPrintable(_ input: [UInt8], encoding: String.Encoding) -> String? {
     let bytes = quotedPrintableBytes(input, isHeader: false)
-    return String(bytes: bytes, encoding: encoding)
+    return decodeText(bytes, encoding: encoding)
 }
 
 /// Decodes a base64 body as text using the given encoding.
@@ -205,7 +255,7 @@ func decodeBase64(_ input: String, encoding: String.Encoding) -> String {
     guard let data = Data(base64Encoded: cleaned) else {
         return input
     }
-    return String(data: data, encoding: encoding) ?? input
+    return decodeText(Array(data), encoding: encoding) ?? input
 }
 
 /// Decodes a leaf entity's body to its raw bytes according to the transfer
@@ -254,7 +304,7 @@ func decodeRFC2047Header(_ input: String) -> String {
         if String(match.output.2).uppercased() == "B" {
             result += decodeBase64(text, encoding: encoding)
         } else {
-            result += String(bytes: quotedPrintableBytes(Array(text.utf8), isHeader: true), encoding: encoding) ?? text
+            result += decodeText(quotedPrintableBytes(Array(text.utf8), isHeader: true), encoding: encoding) ?? text
         }
 
         lastEnd = match.range.upperBound

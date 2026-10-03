@@ -400,7 +400,7 @@ extension EMLParser {
 
         let bytes = raw.unicodeScalars.map { UInt8(truncatingIfNeeded: $0.value) }
         for encoding in encodings {
-            if let text = String(bytes: bytes, encoding: encoding) {
+            if let text = decodeText(bytes, encoding: encoding) {
                 return text
             }
         }
