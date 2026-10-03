@@ -528,7 +528,8 @@ extension EMLParser {
     }
 
     /// Parses the header block into a dictionary with lowercased header names.
-    /// Folded headers (continuation lines starting with whitespace) are unfolded.
+    /// Folded headers (continuation lines starting with whitespace) are unfolded,
+    /// one space between the pieces that hold text.
     /// Raw 8-bit bytes in a value, against RFC 5322 but common in old mail, are
     /// decoded like any other raw text (`decodedRaw`).
     func parseHeaders(_ headerBlock: String) -> [String: String] {
@@ -538,9 +539,13 @@ extension EMLParser {
         let lines = headerBlock.components(separatedBy: "\n")
         for line in lines {
             if line.hasPrefix(" ") || line.hasPrefix("\t") {
-                // Continuation of the previous header (RFC 5322 folding)
+                // Continuation of the previous header (RFC 5322 folding). An
+                // empty piece gets no space: Outlook folds a long subject right
+                // after its colon, and the space joining it to the empty value
+                // led the subject (30 of 716 archive mails, 2026-10-03).
                 if let name = currentName, let value = headers[name] {
-                    headers[name] = value + " " + line.trimmingCharacters(in: .whitespaces)
+                    let continuation = line.trimmingCharacters(in: .whitespaces)
+                    headers[name] = [value, continuation].filter { $0.isEmpty == false }.joined(separator: " ")
                 }
                 continue
             }

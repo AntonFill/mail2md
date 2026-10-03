@@ -67,6 +67,21 @@ struct EMLParserTests {
         #expect(message.subject == "A very long subject line")
     }
 
+    /// Two folds whose joining space ended up at the edge of the value. Outlook
+    /// folds a long subject right after its colon, so the value starts on the
+    /// next line and the space joining it to the empty first one led it (found
+    /// 2026-10-03 on a real mail); a line of only whitespace continues a header
+    /// with nothing, and the space before it trailed.
+    @Test(arguments: [
+        "Subject:\r\n =?Windows-1252?Q?Einladung_zum_Gespr=E4ch?=\r\n\r\nBody",
+        "Subject: Einladung zum Gespräch\r\n \r\n\r\nBody",
+    ])
+    func leavesNoSpaceAtTheEdgeOfAFoldedHeader(eml: String) {
+        let message = EMLParser().parse(eml)
+
+        #expect(message.subject == "Einladung zum Gespräch")
+    }
+
     @Test func handlesMissingHeadersGracefully() {
         let message = EMLParser().parse("X-Custom: nothing useful\r\n\r\nJust a body")
 
