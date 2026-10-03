@@ -133,6 +133,169 @@ struct BodySelectionTests {
 
         #expect(message.body == "Nur Text")
     }
+
+    /// RFC 2046 §5.1.4: the forms of an alternative stand in increasing
+    /// faithfulness, and a client shows the last one it can. Outlook's plain
+    /// form writes a link as its text and its address side by side, and only
+    /// the HTML form says which is which.
+    @Test func takesTheLastFormOfAnAlternative() {
+        let eml = """
+            Content-Type: multipart/alternative; boundary="b"\r
+            \r
+            --b\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            Gesendet von Outlook für iOS<https://example.com/ios>\r
+            --b\r
+            Content-Type: text/html; charset=utf-8\r
+            \r
+            <html><body><div>Gesendet von <a href="https://example.com/ios">Outlook für iOS</a></div></body></html>\r
+            --b--\r
+            """
+
+        #expect(EMLParser().parse(eml).body == "Gesendet von [Outlook für iOS](https://example.com/ios)")
+    }
+
+    /// The order is the sender's word on faithfulness, not the media type: a
+    /// plain form after the HTML one is the last, so it is the one taken.
+    @Test func takesThePlainFormWhenItComesLast() {
+        let eml = """
+            Content-Type: multipart/alternative; boundary="b"\r
+            \r
+            --b\r
+            Content-Type: text/html; charset=utf-8\r
+            \r
+            <html><body><p>Hallo <b>Anton</b></p></body></html>\r
+            --b\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            Hallo Anton\r
+            --b--\r
+            """
+
+        #expect(EMLParser().parse(eml).body == "Hallo Anton")
+    }
+
+    /// A calendar invitation adds its event as a third form, one this tool
+    /// cannot show, so the HTML form before it is the last one it can.
+    @Test func takesTheLastFormItCanShow() {
+        let eml = """
+            Content-Type: multipart/alternative; boundary="b"\r
+            \r
+            --b\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            Einladung: Kennenlernen\r
+            --b\r
+            Content-Type: text/html; charset=utf-8\r
+            \r
+            <html><body><p><b>Einladung:</b> Kennenlernen</p></body></html>\r
+            --b\r
+            Content-Type: text/calendar; charset=utf-8; method=REQUEST\r
+            \r
+            BEGIN:VCALENDAR\r
+            END:VCALENDAR\r
+            --b--\r
+            """
+
+        #expect(EMLParser().parse(eml).body == "**Einladung:** Kennenlernen")
+    }
+
+    /// An HTML form travels with its images in a `multipart/related`, which
+    /// is then the last form. The image is no text and stays out of the body.
+    @Test func readsTheLastFormFromARelatedContainer() {
+        let eml = """
+            Content-Type: multipart/alternative; boundary="alt"\r
+            \r
+            --alt\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            Hallo Anton\r
+            \r
+            [cid:logo]\r
+            --alt\r
+            Content-Type: multipart/related; boundary="rel"\r
+            \r
+            --rel\r
+            Content-Type: text/html; charset=utf-8\r
+            \r
+            <html><body><p>Hallo <i>Anton</i></p><img src="cid:logo"></body></html>\r
+            --rel\r
+            Content-Type: image/png\r
+            Content-ID: <logo>\r
+            Content-Transfer-Encoding: base64\r
+            \r
+            iVBORw0KGgo=\r
+            --rel--\r
+            --alt--\r
+            """
+
+        #expect(EMLParser().parse(eml).body == "Hallo *Anton*")
+    }
+
+    /// Apple Mail sends a document placed in the middle of a mail as an HTML
+    /// form in pieces, one on either side of the document. All pieces make up
+    /// the last form, so all of them reach the note, and the plain form's
+    /// placeholder for the document (U+FFFC) does not.
+    @Test func joinsTheHTMLOnEitherSideOfAnAttachmentInTheLastForm() {
+        let eml = """
+            Content-Type: multipart/alternative; boundary="alt"\r
+            \r
+            --alt\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            Guten Tag,\r
+            \r
+            hier das Formular:\r
+            \u{FFFC}\r
+            \r
+            Freundliche Grüsse\r
+            Anton\r
+            --alt\r
+            Content-Type: multipart/mixed; boundary="mix"\r
+            \r
+            --mix\r
+            Content-Type: text/html; charset=utf-8\r
+            \r
+            <html><head></head><body>Guten Tag,<div><br></div><div>hier das Formular:</div><div></div></body></html>\r
+            --mix\r
+            Content-Type: application/pdf; name="Formular.pdf"\r
+            Content-Disposition: inline; filename="Formular.pdf"\r
+            Content-Transfer-Encoding: base64\r
+            \r
+            JVBERi0xLjQK\r
+            --mix\r
+            Content-Type: text/html; charset=utf-8\r
+            \r
+            <html><head></head><body><div></div><div><br></div><div>Freundliche Grüsse</div><div>Anton</div></body></html>\r
+            --mix--\r
+            --alt--\r
+            """
+        let message = EMLParser().parse(eml)
+
+        #expect(message.body == "Guten Tag,\n\nhier das Formular:\n\nFreundliche Grüsse\nAnton")
+        #expect(message.attachmentNames == ["Formular.pdf"])
+    }
+
+    /// A newsletter that is all images shows nothing once the images are gone,
+    /// so the form before it, the plain one, is taken instead.
+    @Test func fallsBackToThePlainFormWhenTheHTMLShowsNothing() {
+        let eml = """
+            Content-Type: multipart/alternative; boundary="b"\r
+            \r
+            --b\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            Herbstaktion: alle Velos 20 % günstiger.\r
+            --b\r
+            Content-Type: text/html; charset=utf-8\r
+            \r
+            <html><body><a href="https://example.com/aktion"><img src="https://example.com/aktion.png" alt=""></a></body></html>\r
+            --b--\r
+            """
+
+        #expect(EMLParser().parse(eml).body == "Herbstaktion: alle Velos 20 % günstiger.")
+    }
 }
 
 // MARK: -
@@ -193,11 +356,29 @@ struct CharsetFallbackTests {
     /// Quoted-printable allows no raw bytes beyond ASCII, but an insurer's web
     /// form sends them. They are read in the part's charset like the escaped
     /// one, and byte A4 is the euro sign there, not Latin-1's currency sign.
+    /// The real mail sends an HTML form after this part, which is the one
+    /// read, so the part stands alone here.
     @Test func readsRawBytesInAQuotedPrintablePartInItsCharset() throws {
-        let reading = try #require(EMLParser.reading(latin9QuotedPrintableEML))
+        let eml = latin1("""
+            Subject: Ihre Anfrage\r
+            Content-Type: text/plain; charset=ISO-8859-15\r
+            Content-Transfer-Encoding: quoted-printable\r
+            \r
+            Grüße aus M=FCnchen, der Beitrag beträgt 12 \u{00A4} im Monat.\r
+            """)
+        let reading = try #require(EMLParser.reading(eml))
         let message = reading.parser.parse(reading.raw)
 
         #expect(message.body == "Grüße aus München, der Beitrag beträgt 12 € im Monat.")
+    }
+
+    /// The insurer's whole mail: a file that is not UTF-8 because of its plain
+    /// form, read from its HTML form, which writes every umlaut as an entity.
+    @Test func readsTheHTMLFormOfAFileThatIsNotUTF8() throws {
+        let reading = try #require(EMLParser.reading(latin9QuotedPrintableEML))
+        let message = reading.parser.parse(reading.raw)
+
+        #expect(message.body == "Grüße aus München, der [Beitrag](https://example.com/beitrag) beträgt 12 € im Monat.")
     }
 
     /// Each part is read in the charset it declares itself, not in the first
@@ -277,8 +458,8 @@ struct AttachmentsTests {
     @Test func extractsBodyFromNestedAlternativeAlongsideAttachments() {
         let message = EMLParser().parse(mixedEML)
 
-        // Body still comes from the nested multipart/alternative's text/plain.
-        #expect(message.body == "Hallo Anton, im Anhang finden Sie die Unterlagen.")
+        // Body still comes from the nested multipart/alternative, its last form.
+        #expect(message.body == "Hallo Anton, im Anhang finden Sie die **Unterlagen**.")
     }
 
     @Test func listsNoAttachmentsForSinglePartMail() {

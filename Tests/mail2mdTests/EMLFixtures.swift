@@ -28,7 +28,9 @@ let simpleEML = """
 
 /// Anonymised real-world shape: multipart/alternative with a quoted-printable
 /// text/plain part (soft line breaks, multi-byte `=XX` sequences) plus a
-/// text/html part, and RFC 2047 encoded-word From/Subject headers.
+/// text/html part saying the same, and RFC 2047 encoded-word From/Subject
+/// headers. The HTML part is the one read, so it carries the soft break in the
+/// middle of a word, where collapsing whitespace cannot hide a broken one.
 let multipartEML = """
     From: =?utf-8?Q?Jos=C3=A9_Garc=C3=ADa?= <jose@example.com>\r
     To: Anton Fillmann <anton@example.com>\r
@@ -57,7 +59,9 @@ let multipartEML = """
     Content-Type: text/html; charset=utf-8\r
     Content-Transfer-Encoding: quoted-printable\r
     \r
-    <html><body><p>Hallo Anton,</p></body></html>\r
+    <html><body><p>Hallo Anton,</p><p>wir freuen uns, dir eine Zusage machen zu k=C3=B6nnen. Deine Unter=\r
+    lagen haben uns <strong>voll =C3=BCberzeugt</strong>.</p><p>Willkommen im Team=E2=80=94 wir freuen uns auf=\r
+     dich.</p><p>Viele Gr=C3=BC=C3=9Fe</p></body></html>\r
     \r
     --__boundary_42__--\r
     """
@@ -110,7 +114,7 @@ let mixedEML = """
     --inner\r
     Content-Type: text/html; charset=utf-8\r
     \r
-    <html><body><p>Hallo Anton</p></body></html>\r
+    <html><body><p>Hallo Anton, im Anhang finden Sie die <strong>Unterlagen</strong>.</p></body></html>\r
     --inner--\r
     --outer\r
     Content-Type: application/pdf; name="Lebenslauf.pdf"\r
@@ -456,7 +460,9 @@ let latin1EML = latin1("""
 /// The shape of a reply from an insurer's web form: an alternative whose plain
 /// part declares ISO-8859-15 and quoted-printable, yet carries two umlauts as
 /// raw bytes beside an escaped one. `\u{00A4}` is the raw byte A4, the euro
-/// sign in ISO-8859-15 and the currency sign in Latin-1.
+/// sign in ISO-8859-15 and the currency sign in Latin-1. The HTML part says
+/// the same in ASCII, its umlauts written as entities, and links a word the
+/// plain part leaves bare, as the real one does.
 let latin9QuotedPrintableEML = latin1("""
     From: Kundenservice <service@example.com>\r
     To: Anton Fillmann <anton@example.com>\r
@@ -474,7 +480,7 @@ let latin9QuotedPrintableEML = latin1("""
     Content-Type: text/html; charset=US-ASCII\r
     Content-Transfer-Encoding: quoted-printable\r
     \r
-    <p>Ihre Anfrage</p>\r
+    <p>Gr&uuml;&szlig;e aus M&uuml;nchen, der <a href=3D"https://example.com/beitrag">Beitrag</a> betr&auml;gt 12 &euro; im Monat.</p>\r
     --b--\r
     """)
 

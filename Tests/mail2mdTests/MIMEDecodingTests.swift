@@ -11,12 +11,12 @@ import Testing
 
 struct MIMEDecodingTests {
 
-    @Test func picksTextPlainFromMultipartAlternative() {
+    @Test func decodesTheHTMLFormOfMultipartAlternative() {
         let message = EMLParser().parse(multipartEML)
         let expected = """
             Hallo Anton,
 
-            wir freuen uns, dir eine Zusage machen zu können. Deine Unterlagen haben uns voll überzeugt.
+            wir freuen uns, dir eine Zusage machen zu können. Deine Unterlagen haben uns **voll überzeugt**.
 
             Willkommen im Team— wir freuen uns auf dich.
 
@@ -29,8 +29,8 @@ struct MIMEDecodingTests {
     @Test func decodesQuotedPrintableSoftBreaksAndMultiByte() {
         let message = EMLParser().parse(multipartEML)
 
-        // Soft line break joins the sentence without inserting a newline.
-        #expect(message.body.contains("Deine Unterlagen haben uns voll überzeugt."))
+        // Soft line break joins the word without inserting anything.
+        #expect(message.body.contains("Deine Unterlagen haben uns **voll überzeugt**."))
         // 3-byte UTF-8 sequence =E2=80=94 decodes to an em dash.
         #expect(message.body.contains("Willkommen im Team—"))
         // No raw QP artefacts leak through.

@@ -147,7 +147,8 @@ struct EMLParser {
 // MARK: - MIME body selection
 extension EMLParser {
 
-    /// Selects and decodes the best plain-text body for a message.
+    /// Selects and decodes the body of a message, as text or as Markdown
+    /// converted from HTML.
     func extractBody(headers: [String: String], rawBody: String) -> String {
         if let text = self.plainText(headers: headers, rawBody: rawBody) {
             return text
@@ -201,24 +202,29 @@ extension EMLParser {
         return segments.joined(separator: "\n\n")
     }
 
-    /// Takes one form of a `multipart/alternative`: `text/plain` first, then a
-    /// nested container that yields text, then HTML converted to Markdown.
+    /// Takes one form of a `multipart/alternative`: the last one that shows
+    /// something. RFC 2046 §5.1.4 orders the forms by increasing faithfulness
+    /// to the original, and a mail client shows the last one it can, so that
+    /// form is what the sender saw: HTML converted to Markdown, or the
+    /// container holding it, such as a `multipart/related` with its images.
+    ///
+    /// Until v1.2.0 the plain form came first. A mail client shows it to no
+    /// one, and it lost what only the HTML form carries: a button and its link
+    /// in a transactional mail, the link behind Outlook's text, the headings,
+    /// lists and code of a newsletter.
+    ///
+    /// A form that shows nothing gives way to the one before it, the plain
+    /// text of a newsletter that is all images.
     func preferredAlternative(_ parts: [MIMEEntity]) -> String? {
-        // 1. Prefer a text/plain part at this level.
-        for part in parts where parseContentType(part.headers["content-type"]).mediaType == "text/plain" {
-            return self.renderedText(part)
-        }
-
-        // 2. Descend into nested multipart containers (e.g. multipart/related).
-        for part in parts where parseContentType(part.headers["content-type"]).mediaType.hasPrefix("multipart/") {
-            if let nested = self.plainText(headers: part.headers, rawBody: part.rawBody) {
-                return nested
+        let forms = parts.reversed()
+        for form in forms {
+            guard
+                let text = self.bodyText(of: form),
+                text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            else {
+                continue
             }
-        }
-
-        // 3. Fall back to an HTML part, converted to Markdown.
-        for part in parts where parseContentType(part.headers["content-type"]).mediaType == "text/html" {
-            return self.renderedText(part)
+            return text
         }
 
         return nil
