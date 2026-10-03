@@ -61,7 +61,7 @@ The style was set by hand across the sources and is the reference. **When in dou
 - **No `!` as a negation, anywhere.** Write the comparison out: `self.force == false`, `value.isEmpty == false`, `filter { $0.isWhitespace == false }`, and in a test `#expect(written.contains("x") == false)`. A leading `!` is one character that flips a meaning and is easy to read past.
 - **No single-line bodies.** Every `if`, `guard` and `else` body goes on its own line between braces, even `return nil`. So never `guard let x else { return nil }`.
 - **Always write `return` out**, including in computed properties, which therefore do not get a one-line form. Closures are exempt, because there the expression *is* the argument.
-- **`catch` starts its own line**, under the closing brace of the `do` block, never cuddled as `} catch`.
+- **`catch` and `else` start their own line**, under the closing brace of the block before them, never cuddled as `} catch` or `} else`.
 - **Line length is not a limit.** A signature or a call stays on one line even at 150 characters. Breaking a line is a way to show structure, not a way to obey a number.
 - **An assignment stays with its receiver.** `var text = body` on one line, the method chain indented below it. Never a break directly after the `=`.
 - **Multiple conditions:** in an `if let`, following conditions line up under the first and the brace stays at the end of the last one. In a `guard` with several conditions, `guard` stands alone, the conditions are indented below it, and `else {` gets its own line.
@@ -69,7 +69,7 @@ The style was set by hand across the sources and is the reference. **When in dou
 - **Column alignment in literal tables is intentional**, such as the extra space in `"UT":  "+0000"` that lines the offsets up. Keep it.
 - **Build an object once, not per iteration**, such as the single `DateFormatter` before the loop in `parseDate`.
 
-> **Why there is no formatter here.** `.swift-format` was tried and removed the same day. Three of the rules above sit in its pretty-printer and cannot be configured away: it breaks after `=` before a method chain, it cuddles `} catch`, and it collapses alignment spaces. Measured against the hand-set version it wanted to rewrite 113 lines, and still 32 at any line width. A tool that fights the author is worse than no tool.
+> **Why there is no formatter here.** `.swift-format` was tried and removed the same day. Two of the rules above sit in its pretty-printer and cannot be configured away: it breaks after `=` before a method chain, and it collapses alignment spaces. (Putting `catch` and `else` on their own line it can do, with `lineBreakBeforeControlFlowKeywords`.) Measured against the hand-set version with its default settings, it wanted to rewrite 113 lines, and still 32 at any line width. A tool that fights the author is worse than no tool.
 
 ## Before you open a pull request
 

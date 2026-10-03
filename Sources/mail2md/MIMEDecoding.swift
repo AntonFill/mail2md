@@ -303,7 +303,8 @@ func decodeRFC2047Header(_ input: String) -> String {
         let text = String(match.output.3)
         if String(match.output.2).uppercased() == "B" {
             result += decodeBase64(text, encoding: encoding)
-        } else {
+        }
+        else {
             result += decodeText(quotedPrintableBytes(Array(text.utf8), isHeader: true), encoding: encoding) ?? text
         }
 
