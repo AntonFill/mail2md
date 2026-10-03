@@ -80,13 +80,17 @@ The note is written before the attachments, so a note that would be overwritten 
 
 mail2md writes the metadata as YAML frontmatter, so the output is a note first and prose second. The rest of the design follows from that: timestamps in the reader's local time, so `created` sorts correctly beside your other notes, and attachment filenames as a flow list, so a query can reach them.
 
-It is also built to be fast and unremarkable to use. A 57 KB mail with a four-deep quoted chain and an S/MIME signature converts in about 25 ms on an M1, there is nothing to configure, and nothing has to be running.
+It is also built to be fast and unremarkable to use. Across 716 real mails the median conversion takes under 30 ms on an M1, there is nothing to configure, and nothing has to be running.
 
-**[Postbox](https://github.com/istefox/Postbox)** is the closest alternative, and parts of it are better: it renders inline `cid:` images, keeps HTML tables, reads `.msg`, and de-duplicates by Message-ID. It is an Obsidian plugin, so it is desktop-only and Obsidian has to be open. mail2md is the better fit when the conversion should happen without Obsidian in the loop: in a shell pipeline, a cron job, a Makefile, or on a machine with no GUI.
+**[Postbox](https://github.com/istefox/Postbox)** is the closest alternative, and parts of it are better: it renders inline `cid:` images, reads `.msg`, and de-duplicates by Message-ID. It is an Obsidian plugin, so it is desktop-only and Obsidian has to be open. mail2md is the better fit when the conversion should happen without Obsidian in the loop: in a shell pipeline, a cron job, a Makefile, or on a machine with no GUI.
 
 ## Status
 
 Parses single-part, `multipart/alternative` (reads the last form it can show, as RFC 2046 orders them, so the HTML one where there is one, and the plain one when the HTML shows nothing) and `multipart/mixed` messages, decodes quoted-printable and base64 transfer encodings, and decodes RFC 2047 encoded-word headers. In a `multipart/mixed` message every inline text part is read in order, so text that continues after an attachment placed mid-message is kept, and an attached text file never stands in for the body. Converts HTML to Markdown, lists attachment filenames in the frontmatter, and optionally extracts attachment files to disk under a naming scheme of your choosing, linking them from the note (S/MIME signature parts are excluded; extracted filenames are sanitised, so a crafted header cannot write outside the target directory).
+
+HTML is laid out the way a browser shows it: a table of data becomes a Markdown table, a table used for layout becomes lines of text, an element the mail hides in its own style stays out (the preview text a newsletter tucks in front of its content), and preformatted text becomes a code block.
+
+Invisible characters that never belong in running text are removed: the zero-width fillers behind that preview text, Unicode tag characters outside a flag, a stray zero-width space or byte order mark. Those that can belong there but also change how text reads, a zero-width joiner outside an emoji, direction marks and bidi controls, stay and are counted. Either way one line on stderr says what was found, so text a reader cannot see does not reach a vault, or a language model reading it, unnoticed.
 
 A named document that Apple Mail dispositions as `inline` rather than `attachment` still counts as an attachment, since that is how a real PDF often arrives. Inline *images* do not: a named inline image is a signature logo or a tracking pixel far more often than a file someone meant to send.
 
@@ -118,7 +122,7 @@ make install   # installs to /usr/local/bin
 swift test     # run the test suite
 ```
 
-Requires Swift 6.0 or newer (Xcode 16+), built and tested against Swift 6.3. Runs on macOS 13+.
+Requires Swift 6.0 or newer (Xcode 16+), built and tested against Swift 6.4. Runs on macOS 13+.
 
 ## Contributing
 
