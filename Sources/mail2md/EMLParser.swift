@@ -123,9 +123,9 @@ struct EMLParser {
             return cleaned.text
         }
 
-        let from = headers["from"].map(decodeRFC2047Header).map(visible)
-        let to = headers["to"].map(decodeRFC2047Header).map(visible)
-        let cc = headers["cc"].map(decodeRFC2047Header).map(visible)
+        let from = headers["from"].map(normalizeAddressList).map(visible)
+        let to = headers["to"].map(normalizeAddressList).map(visible)
+        let cc = headers["cc"].map(normalizeAddressList).map(visible)
         let subject = headers["subject"].map(decodeRFC2047Header).map(visible)
         let cleanBody = BodyCleaner.clean(visible(body))
 

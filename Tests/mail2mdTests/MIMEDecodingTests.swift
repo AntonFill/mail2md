@@ -165,3 +165,96 @@ struct Windows1252Tests {
         #expect(differing.isEmpty)
     }
 }
+
+// MARK: -
+
+/// An address header as a reader wants it. What a mail program needs and a
+/// reader does not goes: the quotes around a plain name, the brackets around
+/// an address without one, and a name that is only the address again, which
+/// Outlook writes for everybody not in its contacts (223 of 1'500 address
+/// headers in the archive, measured 2026-10-03).
+struct AddressListTests {
+
+    @Test(arguments: [
+        "\"anna@example.com\" <anna@example.com>",
+        "\"'anna@example.com'\" <anna@example.com>",
+        "\"Anna@Example.com\" <anna@example.com>",
+        "<anna@example.com>",
+        "anna@example.com",
+    ])
+    func writesTheBareAddressWhereTheNameAddsNothing(header: String) {
+        #expect(normalizeAddressList(header) == "anna@example.com")
+    }
+
+    @Test func dropsTheQuotesAroundANameWithoutAComma() {
+        #expect(normalizeAddressList("\"Muster AG\"  <info@example.com>") == "Muster AG <info@example.com>")
+    }
+
+    @Test func keepsTheQuotesAroundANameWithACommaOrBrackets() {
+        let header = "\"Muster, Jana\" <jana@example.com>, \"Team <Support>\" <team@example.com>"
+
+        #expect(normalizeAddressList(header) == header)
+    }
+
+    @Test func quotesANameWhoseCommaOnlyDecodingReveals() {
+        // Decoding the whole header used to set the comma bare, and the list
+        // read as three mailboxes instead of two.
+        let header = "\"Muster, Jana\" <jana@example.com>, =?iso-8859-1?Q?M=FCller=2C_J=F6rg?= <joerg@example.com>"
+
+        #expect(normalizeAddressList(header) == "\"Muster, Jana\" <jana@example.com>, \"Müller, Jörg\" <joerg@example.com>")
+    }
+
+    @Test func decodesAName() {
+        #expect(normalizeAddressList("=?utf-8?Q?Andr=C3=A9_Muster?= <andre@example.com>") == "André Muster <andre@example.com>")
+    }
+
+    @Test func trimsTheSpacesAnEncodedNameCarriesAtItsEdges() {
+        #expect(normalizeAddressList("=?utf-8?Q?_Jana_Muster_?= <jana@example.com>") == "Jana Muster <jana@example.com>")
+    }
+
+    @Test func dropsTheQuotesAMailerEncodedWithTheName() {
+        let header = "=?iso-8859-1?Q?=22Jana_M=FCller_=7C_Muster_AG=22?= <jana@example.com>"
+
+        #expect(normalizeAddressList(header) == "Jana Müller | Muster AG <jana@example.com>")
+    }
+
+    @Test func keepsTheQuotesOfANameMadeOfTwoQuotedStrings() {
+        #expect(normalizeAddressList("\"Muster\" \"AG\" <info@example.com>") == "\"Muster\" \"AG\" <info@example.com>")
+    }
+
+    @Test func unescapesAQuotedName() {
+        #expect(normalizeAddressList("\"Jana \\\"JM\\\" Muster\" <jana@example.com>") == "Jana \"JM\" Muster <jana@example.com>")
+    }
+
+    @Test func keepsAnEscapedQuoteFromEndingTheName() {
+        // The comma after the escaped quote still stands inside the name.
+        let header = "\"Jana \\\"JM, Team\" <jana@example.com>, \"anna@example.com\" <anna@example.com>"
+
+        #expect(normalizeAddressList(header) == "\"Jana \\\"JM, Team\" <jana@example.com>, anna@example.com")
+    }
+
+    @Test func writesEveryMailboxOfAListPlain() {
+        let header = "\"anna@example.com\" <anna@example.com>, jana@example.com, <team@example.com>"
+
+        #expect(normalizeAddressList(header) == "anna@example.com, jana@example.com, team@example.com")
+    }
+
+    @Test func keepsAListThatIsAlreadyPlain() {
+        let header = "anna@example.com, Jana Muster <jana@example.com>"
+
+        #expect(normalizeAddressList(header) == header)
+    }
+
+    /// A group, or a name with a bare comma, is no list of mailboxes. Guessing
+    /// at it could lose an address, so it comes out as before, only decoded.
+    @Test(arguments: [
+        "Undisclosed recipients: ;",
+        "Muster, Jana <jana@example.com>",
+        "jana@example.com (Jana Muster), \"anna@example.com\" <anna@example.com>",
+        "<>",
+        ",",
+    ])
+    func leavesAHeaderThatIsNoListOfMailboxesAsItWas(header: String) {
+        #expect(normalizeAddressList(header) == header)
+    }
+}

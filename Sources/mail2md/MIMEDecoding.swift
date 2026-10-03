@@ -316,6 +316,160 @@ func decodeRFC2047Header(_ input: String) -> String {
     return result
 }
 
+// MARK: - Address lists
+
+/// An address header (`From`, `To`, `Cc`) as a reader wants it: each mailbox
+/// as `Name <address>`, or as the bare address where the name adds nothing.
+///
+/// What a mail program needs and a reader does not goes: the quotes around a
+/// name, the angle brackets around an address without one, and a name that is
+/// only the address again, which Outlook writes for everybody not in its
+/// contacts (223 of 1'500 address headers in the archive, measured
+/// 2026-10-03). A name keeps its quotes where it holds a comma or an angle
+/// bracket, which would otherwise split the list or the mailbox. That includes
+/// a comma only decoding reveals (`=?iso-8859-1?Q?M=FCller=2C_J=F6rg?=`), which
+/// decoding the whole header used to set bare.
+///
+/// So the list is split before anything is decoded, at the commas outside a
+/// quoted name. A header that is no list of mailboxes, a group like
+/// `Undisclosed recipients: ;`, a name with a bare comma or an address with
+/// an old-style comment, comes out as before, only decoded: guessing at it
+/// could lose an address.
+func normalizeAddressList(_ raw: String) -> String {
+    var mailboxes: [String] = []
+    let pieces = splitAddressList(raw)
+    for piece in pieces {
+        guard let mailbox = normalizeMailbox(piece) else {
+            return decodeRFC2047Header(raw)
+        }
+        mailboxes.append(mailbox)
+    }
+
+    guard mailboxes.isEmpty == false else {
+        return decodeRFC2047Header(raw)
+    }
+    return mailboxes.joined(separator: ", ")
+}
+
+/// Splits an address list at the commas outside a quoted name. A comma in an
+/// address or a comment, which no mail in the archive has, splits a mailbox,
+/// and the header comes out as before.
+private func splitAddressList(_ raw: String) -> [String] {
+    var pieces: [String] = []
+    var piece = ""
+    var isQuoted = false
+    var isEscaped = false
+
+    for character in raw {
+        if isEscaped {
+            isEscaped = false
+        }
+        else if isQuoted, character == "\\" {
+            isEscaped = true
+        }
+        else if character == "\"" {
+            isQuoted.toggle()
+        }
+        else if isQuoted == false, character == "," {
+            pieces.append(piece)
+            piece = ""
+            continue
+        }
+        piece.append(character)
+    }
+    pieces.append(piece)
+
+    return pieces
+        .map { $0.trimmingCharacters(in: spacesAndTabs) }
+        .filter { $0.isEmpty == false }
+}
+
+/// One mailbox as `Name <address>` or the bare address, or nil if the piece
+/// is none: an address holds an `@`, and nothing stands beside a bare one.
+private func normalizeMailbox(_ piece: String) -> String? {
+    if let match = piece.wholeMatch(of: /(.*?)\s*<([^<>\s]*)>/) {
+        let address = String(match.2)
+        guard address.contains("@") else {
+            return nil
+        }
+        return mailbox(name: displayName(String(match.1)), address: address)
+    }
+
+    guard piece.wholeMatch(of: /[^\s<>"(),;:]+@[^\s<>"(),;:]+/) != nil else {
+        return nil
+    }
+    return piece
+}
+
+/// A display name as a reader sees it: decoded, then unquoted, so the quotes
+/// a mailer encoded along with the name go as well, and without the single
+/// quotes Outlook puts around an address it uses as a name.
+private func displayName(_ raw: String) -> String {
+    let name = unquoted(decodeRFC2047Header(raw).trimmingCharacters(in: spacesAndTabs))
+    guard
+        name.count >= 2,
+        name.hasPrefix("'"),
+        name.hasSuffix("'")
+    else {
+        return name
+    }
+    return String(name.dropFirst().dropLast())
+}
+
+/// The text of a quoted string with its backslash escapes resolved, if the
+/// text is one quoted string; any other text, `"Muster" "AG"` among them, as
+/// it is.
+private func unquoted(_ text: String) -> String {
+    guard
+        text.count >= 2,
+        text.hasPrefix("\""),
+        text.hasSuffix("\"")
+    else {
+        return text
+    }
+
+    var result = ""
+    var isEscaped = false
+    for character in text.dropFirst().dropLast() {
+        if isEscaped {
+            isEscaped = false
+        }
+        else if character == "\\" {
+            isEscaped = true
+            continue
+        }
+        else if character == "\"" {
+            return text
+        }
+        result.append(character)
+    }
+    return result
+}
+
+/// A mailbox as `Name <address>`, the name quoted only where a comma or an
+/// angle bracket in it would split the list or the mailbox, or the bare
+/// address where there is no name or the name is the address again.
+private func mailbox(name: String, address: String) -> String {
+    guard
+        name.isEmpty == false,
+        name.caseInsensitiveCompare(address) != .orderedSame
+    else {
+        return address
+    }
+    guard name.contains(where: { $0 == "," || $0 == "<" || $0 == ">" }) else {
+        return "\(name) <\(address)>"
+    }
+
+    let escaped = name
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+    return "\"\(escaped)\" <\(address)>"
+}
+
+/// Spaces and tabs only: Foundation's `.whitespaces` holds U+200B as well,
+/// and trimming it here would hide it from the invisible-character rule.
+private let spacesAndTabs = CharacterSet(charactersIn: " \t")
+
 // MARK: - Helpers
 
 /// Returns the numeric value of an ASCII hex digit, or nil.

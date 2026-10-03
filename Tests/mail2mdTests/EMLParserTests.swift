@@ -109,6 +109,25 @@ struct EMLParserTests {
 
         #expect(message.cc == "Team <team@example.com>")
     }
+
+    /// The address headers come as a reader wants them; the subject is no
+    /// address, and its quotes are words.
+    @Test func writesTheAddressHeadersPlainButLeavesTheSubject() {
+        let eml = """
+            From: "Muster AG" <info@example.com>\r
+            To: "anna@example.com" <anna@example.com>\r
+            Cc: <jana@example.com>\r
+            Subject: "Muster AG" <info@example.com>\r
+            \r
+            Body
+            """
+        let message = EMLParser().parse(eml)
+
+        #expect(message.from == "Muster AG <info@example.com>")
+        #expect(message.to == "anna@example.com")
+        #expect(message.cc == "jana@example.com")
+        #expect(message.subject == "\"Muster AG\" <info@example.com>")
+    }
 }
 
 // MARK: -
