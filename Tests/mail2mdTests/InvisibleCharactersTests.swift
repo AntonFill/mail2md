@@ -108,4 +108,22 @@ struct InvisibleCharactersTests {
 
         #expect(report == InvisibleCharacters.Report(zeroWidthSpaces: 3, joiners: 1))
     }
+
+    /// The emitter asks it of an image's alt text. A text is emoji when every
+    /// character is one, joined, varied or toned; a joiner or a variation
+    /// selector alone is none.
+    @Test(arguments: [
+        ("😉", true),
+        ("👨\u{200D}👩\u{200D}👧", true),
+        ("👍🏽", true),
+        ("☺\u{FE0F}", true),
+        ("", false),
+        ("\u{200D}", false),
+        ("\u{FE0F}", false),
+        ("1", false),
+        ("Logo 😉", false),
+    ])
+    func tellsATextOfEmojiFromOtherText(text: String, isEmoji: Bool) {
+        #expect(InvisibleCharacters.isEmoji(text) == isEmoji)
+    }
 }

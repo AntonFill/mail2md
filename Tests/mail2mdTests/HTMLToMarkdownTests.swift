@@ -41,6 +41,25 @@ struct HTMLToMarkdownTests {
         #expect(md == "A & B <tag>")
     }
 
+    /// A chatbot transcript writes an emoji beyond the first 65536 characters
+    /// as the two UTF-16 halves of it, each a reference of its own. Read one by
+    /// one, each half is U+FFFD, and the note showed `��` where the plain form
+    /// of the same mail has the emoji.
+    @Test(arguments: [
+        ("<p>Ich bin der Chatbot &#55358;&#56598; der Post.</p>", "Ich bin der Chatbot 🤖 der Post."),
+        ("<p>Live-Chat &#xD83D;&#xDCAC;</p>", "Live-Chat 💬"),
+        ("<p>&#55358;&#55358;&#56598;</p>", "\u{FFFD}🤖"),
+    ])
+    func joinsAnEmojiWrittenAsItsTwoHalves(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// A half without its partner says nothing, so it stays what the HTML
+    /// standard makes of it, also beside a reference to an ordinary character.
+    @Test func leavesALoneHalfAsTheReplacementCharacter() {
+        #expect(HTMLToMarkdown.convert("<p>A &#55358; B &#56598;&#65; C &#65;&#56598;</p>") == "A \u{FFFD} B \u{FFFD}A C A\u{FFFD}")
+    }
+
     /// Foundation's whitespace set holds the zero-width space, so trimming a
     /// line with it would remove one at the edge before the invisible-character
     /// rule can count it. The emitter trims spaces and nothing else.
@@ -72,13 +91,65 @@ struct HTMLToMarkdownTests {
 
         #expect(md == "Setze `Polar-Version` im Header.")
     }
+
+    /// Outlook sends an emoji typed into a message as a picture of it, with
+    /// the emoji as its alt text; the plain form has `[??]` in its place.
+    @Test func writesAPictureOfAnEmojiAsTheEmoji() {
+        let html = "<p>Wir sehen uns bestimmt wieder <img alt=\"😉\" src=\"cid:image002.png@01D91522\"></p>"
+
+        #expect(HTMLToMarkdown.convert(html) == "Wir sehen uns bestimmt wieder 😉")
+    }
+
+    @Test func dropsAPictureWhoseAltTextIsWords() {
+        let html = "<p>Freundliche Grüsse <img alt=\"Firmenlogo\" src=\"https://example.com/logo.png\"></p>"
+
+        #expect(HTMLToMarkdown.convert(html) == "Freundliche Grüsse")
+    }
+
+    /// A link around blocks that hold links of their own, the preview of a
+    /// repository or a job card, is taken apart and its inner links stay:
+    /// Markdown cannot nest links, and the `[[` it wrote opens a wikilink in
+    /// Obsidian.
+    @Test func takesALinkAroundLinksApart() {
+        let html = """
+            <a href="https://example.com/repo"><table><tr><td>\
+            <a href="https://example.com/repo">example/repo</a> <a href="https://example.com/repo">example.com</a>\
+            </td></tr></table></a>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "[example/repo](https://example.com/repo) [example.com](https://example.com/repo)")
+    }
+
+    /// Only a link a reader can follow takes the outer one apart: an anchor
+    /// without a target, or a link the browser hides, leaves it whole.
+    @Test(arguments: [
+        "<a name=\"karte\"></a>Zur Karte",
+        "Zur Karte<a href=\"https://example.com/versteckt\" style=\"display:none\">versteckt</a>",
+    ])
+    func keepsALinkWhoseInnerAnchorsLeadNowhere(cell: String) {
+        let html = "<a href=\"https://example.com/karte\"><table><tr><td>\(cell)</td></tr></table></a>"
+
+        #expect(HTMLToMarkdown.convert(html) == "[Zur Karte](https://example.com/karte)")
+    }
+
+    /// A bracket in a link's text would end it early, and the pair UPS puts
+    /// around its language links wrote `[[German]](#German)`, a wikilink in
+    /// Obsidian. Inside code a backslash would show, so code keeps its brackets.
+    @Test(arguments: [
+        ("<a href=\"#German\">[German]</a>", "[\\[German\\]](#German)"),
+        ("<a href=\"https://example.com/docs\"><code>list[0]</code> erklärt</a>", "[`list[0]` erklärt](https://example.com/docs)"),
+    ])
+    func escapesTheBracketsInALinksText(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
 }
 
 // MARK: -
 
 /// How a browser stacks blocks: a `div` is a line, a `p` a paragraph, and the
-/// element's own style may say otherwise. Markdown knows two spacings, a line
-/// break and a blank line, so every block boundary lands on one of them.
+/// element's own style may say otherwise, down to an inline element it makes a
+/// block or gives room at its sides. Markdown knows two spacings, a line break
+/// and a blank line, so every block boundary lands on one of them.
 struct BlockLayoutTests {
 
     @Test func setsEachDivOnALineOfItsOwn() {
@@ -182,6 +253,44 @@ struct BlockLayoutTests {
 
         #expect(HTMLToMarkdown.convert(html) == "> Hallo Jane,\n>\n> anbei mein CV.")
     }
+
+    /// A classifieds site sets the links of its footer one below the other
+    /// with `display:block`, and nothing else stands between them.
+    @Test func setsAnInlineElementItsStyleMakesABlockOnLinesOfItsOwn() {
+        let link = "style=\"display: block!important; padding: 12px 0px!important;\""
+        let html = """
+            <div><a href="https://example.com/agb" \(link)>Nutzungsbedingungen</a>\
+            <a href="https://example.com/datenschutz" \(link)>Datenschutz</a></div>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "[Nutzungsbedingungen](https://example.com/agb)\n\n[Datenschutz](https://example.com/datenschutz)")
+    }
+
+    /// Wix keeps the links of its footer apart by padding at their sides, and
+    /// nothing else stands between them either. Room at one side is enough,
+    /// whether it stands after the first link or before the second.
+    @Test(arguments: [
+        ("border-right:1px solid #2D2D2D;padding:0 8px", "padding:0 8px"),
+        ("", "padding-left:8px"),
+        ("margin-right:8px", ""),
+        ("", "margin:0 0 0 8px"),
+    ])
+    func keepsInlineElementsWithRoomAtTheirSidesApart(first: String, second: String) {
+        let html = """
+            <p><a href="https://example.com/hilfe"><span style="\(first)">Hilfe-Center</span></a>\
+            <a href="https://example.com/datenschutz"><span style="\(second)">Datenschutz</span></a></p>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "[Hilfe-Center](https://example.com/hilfe) [Datenschutz](https://example.com/datenschutz)")
+    }
+
+    /// A sender split an address over two links, and a browser shows it as
+    /// one word. Without room between them, they stay together.
+    @Test func leavesTwoLinksWithoutRoomBetweenThemTogether() {
+        let html = "<p><a href=\"https://www.example.ch/\">www.example.c</a><a href=\"https://www.example.com\">om</a></p>"
+
+        #expect(HTMLToMarkdown.convert(html) == "[www.example.c](https://www.example.ch/)[om](https://www.example.com)")
+    }
 }
 
 // MARK: -
@@ -270,8 +379,9 @@ struct PreformattedTextTests {
 // MARK: -
 
 /// A table is either data, written as a Markdown table, or layout, taken apart
-/// into its cells. Data means a row with two filled cells, no table inside it
-/// and no `role="presentation"`.
+/// into its cells. Data means two rows or more, one of them with two filled
+/// cells, no table inside it and no `role="presentation"`. The cells of a
+/// layout row share a line where each but the last holds one.
 struct TableTests {
 
     @Test func writesADataTableUnderAnEmptyHeader() {
@@ -320,9 +430,37 @@ struct TableTests {
     }
 
     @Test func escapesPipesAndKeepsLineBreaksInACell() {
-        let html = "<table><tr><td>A|B</td><td>Zeile eins<br>Zeile zwei</td></tr></table>"
+        let html = "<table><tr><td>A|B</td><td>Zeile eins<br>Zeile zwei</td></tr><tr><td>C</td><td>D</td></tr></table>"
 
-        #expect(HTMLToMarkdown.convert(html) == "|  |  |\n|---|---|\n| A\\|B | Zeile eins<br>Zeile zwei |")
+        #expect(HTMLToMarkdown.convert(html) == "|  |  |\n|---|---|\n| A\\|B | Zeile eins<br>Zeile zwei |\n| C | D |")
+    }
+
+    /// A table of a single row compares nothing, so it is layout, as in
+    /// Mozilla's Readability: a letter beside its menu, a bar of links.
+    @Test func takesATableOfASingleRowForLayout() {
+        let html = """
+            <table><tr><td><a href="https://example.com/bestellung">Ihre Bestellung</a><br><a href="https://example.com/kontakt">Kontakt</a></td>\
+            <td><strong>Sehr geehrter Herr Fillmann,</strong><br>Ihr Antrag ist eingegangen.</td></tr></table>
+            """
+        let expected = """
+            [Ihre Bestellung](https://example.com/bestellung)
+            [Kontakt](https://example.com/kontakt)
+            **Sehr geehrter Herr Fillmann,**
+            Ihr Antrag ist eingegangen.
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// A row that spans the table captions it and holds no data, so a caption
+    /// above a single row leaves nothing to compare either.
+    @Test func takesACaptionAboveASingleRowForLayout() {
+        let html = """
+            <table><tr><td colspan="2"><strong>Rechnung an:</strong></td></tr>\
+            <tr><td>Anton Fillmann<br>8000 Zürich</td><td><strong>Bestellnummer:</strong> M1234567</td></tr></table>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "**Rechnung an:**\nAnton Fillmann\n8000 Zürich\n**Bestellnummer:** M1234567")
     }
 
     /// A grid spaces its columns with an empty one. In a table of data that
@@ -345,9 +483,70 @@ struct TableTests {
     /// Minified HTML has nothing between two cells, so taking a layout table
     /// apart must still keep them apart.
     @Test func takesALayoutTableApartCellByCell() {
-        let html = "<table role=\"presentation\"><tr><td>Links</td><td>Rechts</td></tr></table>"
+        let html = "<table role=\"presentation\"><tr><td>Links<br>oben</td><td>Rechts</td></tr></table>"
 
-        #expect(HTMLToMarkdown.convert(html) == "Links\nRechts")
+        #expect(HTMLToMarkdown.convert(html) == "Links\noben\nRechts")
+    }
+
+    /// A browser shows the cells of a layout row side by side, so where each
+    /// holds one line, they share one: a bullet beside its text.
+    @Test func setsTheCellsOfALayoutRowOnOneLine() {
+        let bullet = "<td width=\"16\"><p style=\"padding:0;Margin:0\">&bull;</p></td>"
+        let html = """
+            <table role="presentation"><tr>\(bullet)<td><p style="padding:0;Margin:0">Lebenslauf</p></td></tr>\
+            <tr><td colspan="2">&nbsp;</td></tr><tr>\(bullet)<td><p style="padding:0;Margin:0">Anschreiben</p></td></tr></table>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "• Lebenslauf\n\n• Anschreiben")
+    }
+
+    /// The last cell may run on below the shared line: a step's number beside
+    /// a text of two lines, which stands in a layout table of its own.
+    @Test func continuesTheLastCellBelowTheSharedLine() {
+        let html = """
+            <table><tr><td valign="top">2</td><td><table><tr><td><img alt="" src="https://example.com/schritt-2.png"></td></tr>\
+            <tr><td colspan="2">QR-Code an den Scanner halten.<br>Schranke öffnet sich.</td></tr></table></td></tr></table>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "2 QR-Code an den Scanner halten.\nSchranke öffnet sich.")
+    }
+
+    /// A block Markdown marks, a list, a heading or a table, cannot share a
+    /// line, so a row with one in a cell keeps its cells apart.
+    @Test(arguments: [
+        ("<td>Termine</td><td><ul><li>Montag</li><li>Dienstag</li></ul></td>", "Termine\n\n- Montag\n- Dienstag"),
+        ("<td><h3>Termine</h3></td><td>Montag</td>", "### Termine\n\nMontag"),
+    ])
+    func keepsTheCellsApartAroundABlockMarkdownMarks(cells: String, expected: String) {
+        #expect(HTMLToMarkdown.convert("<table role=\"presentation\"><tr>\(cells)</tr></table>") == expected)
+    }
+
+    /// The space a browser leaves around the cells stays around their shared
+    /// line.
+    @Test func keepsTheSpaceItsCellsLeaveAroundASharedLine() {
+        let cell = "<td style=\"padding:12px 0\">"
+        let html = "<div>Davor</div><table role=\"presentation\"><tr>\(cell)&bull;</td>\(cell)Lebenslauf</td></tr></table><div>Danach</div>"
+
+        #expect(HTMLToMarkdown.convert(html) == "Davor\n\n• Lebenslauf\n\nDanach")
+    }
+
+    /// A browser sets a header cell in bold, also where its table is layout,
+    /// as the dark bar above the details of the parking confirmation.
+    @Test func setsAHeaderCellOutsideATableOfDataInBold() {
+        let html = "<table><tr><th align=\"left\" style=\"padding: 8px 15px 4px; font-size: 16px;\">Buchungsdetails</th></tr></table>"
+
+        #expect(HTMLToMarkdown.convert(html) == "**Buchungsdetails**")
+    }
+
+    /// Not where its style sets a normal weight, and not where it holds
+    /// blocks: an email framework lays out whole columns in header cells and
+    /// sets their weight back in a stylesheet the emitter does not read.
+    @Test(arguments: [
+        ("<table><tr><th style=\"font-weight: normal;\">Spalte</th></tr></table>", "Spalte"),
+        ("<table><tr><th><div>Zeile eins</div><div>Zeile zwei</div></th></tr></table>", "Zeile eins\nZeile zwei"),
+    ])
+    func leavesAHeaderCellItsWeight(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
     }
 
     /// A logo beside a signature leaves an empty column once the image is
@@ -359,9 +558,10 @@ struct TableTests {
     }
 
     @Test func takesATableHoldingATableForLayout() {
-        let html = "<table><tr><td>Kopf</td><td><table><tr><td>Feld</td><td>Wert</td></tr></table></td></tr></table>"
+        let inner = "<table><tr><td>Feld</td><td>Wert</td></tr><tr><td>Feld 2</td><td>Wert 2</td></tr></table>"
+        let html = "<table><tr><td>Kopf</td><td>\(inner)</td></tr></table>"
 
-        #expect(HTMLToMarkdown.convert(html) == "Kopf\n\n|  |  |\n|---|---|\n| Feld | Wert |")
+        #expect(HTMLToMarkdown.convert(html) == "Kopf\n\n|  |  |\n|---|---|\n| Feld | Wert |\n| Feld 2 | Wert 2 |")
     }
 }
 
@@ -515,20 +715,31 @@ struct SenderStackTests {
         #expect(HTMLToMarkdown.convert(html) == expected)
     }
 
-    /// The shape of the parking confirmation from 2026-09-01: a data table
-    /// inside two layout tables, minified, its sections captioned by rows
-    /// that span both columns.
+    /// The shape of the parking confirmation from 2026-09-01, measured on its
+    /// `.eml` on 2026-10-03: data tables inside two layout tables, minified,
+    /// each captioned by a header cell in a table of its own; numbered steps,
+    /// the number in one cell and pictures and text in a table in the next;
+    /// and a bar of links in a table of a single row.
     @Test func dataTableInsideALayoutTable() {
+        let caption = "<table class=\"row\"><tr><th align=\"left\" style=\"padding: 8px 15px 4px; font-size: 16px;\">"
+        let step = "<table><tr><td valign=\"top\">"
         let html = """
             <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
             <table width="600" cellpadding="0" cellspacing="0"><tr><td>
             <p>Vielen Dank für Ihre Buchung.</p>
-            <table class="details"><tr><th colspan="2">Buchungsdetails</th></tr>\
-            <tr><td><strong>Buchungsnummer:</strong></td><td>M1234567</td></tr>\
-            <tr><td><strong>Einfahrt:</strong></td><td>01.10.2026 um 08:00 Uhr</td></tr>\
-            <tr><th colspan="2">Zahlungsdetails</th></tr>\
+            \(caption)Buchungsdetails</th></tr></table>\
+            <table class="details"><tr><td><strong>Buchungsnummer:</strong></td><td>M1234567</td></tr>\
+            <tr><td><strong>Einfahrt:</strong></td><td>01.10.2026 um 08:00 Uhr</td></tr></table>
+            \(caption)Zahlungsdetails</th></tr></table>\
+            <table class="details"><tr><td><strong>Zahlungsmittel:</strong></td><td>ApplePay</td></tr>\
             <tr><td><strong>Gesamtbetrag:</strong></td><td>99,00 €</td></tr></table>
+            <p><b>So funktioniert der Parkvorgang:</b></p>
+            \(step)1</td><td><table><tr><td><img alt="" src="https://example.com/schritt-1.png"></td></tr>\
+            <tr><td colspan="2">Buchungsbestätigung ausdrucken oder auf dem Handy speichern.</td></tr></table></td></tr></table>
+            \(step)2</td><td><table><tr><td><img alt="" src="https://example.com/schritt-2.png"></td></tr>\
+            <tr><td colspan="2">QR-Code an den Scanner der Einfahrtssäule halten.<br>Schranke öffnet sich.</td></tr></table></td></tr></table>
             <p>Gute Reise!</p>
+            <table><tr><td><a href="https://example.com/restaurants">Restaurants</a></td><td><a href="https://example.com/shops">Shops</a></td></tr></table>
             </td></tr></table>
             </td></tr></table>
             """
@@ -546,9 +757,18 @@ struct SenderStackTests {
 
             |  |  |
             |---|---|
+            | **Zahlungsmittel:** | ApplePay |
             | **Gesamtbetrag:** | 99,00 € |
 
+            **So funktioniert der Parkvorgang:**
+
+            1 Buchungsbestätigung ausdrucken oder auf dem Handy speichern.
+            2 QR-Code an den Scanner der Einfahrtssäule halten.
+            Schranke öffnet sich.
+
             Gute Reise!
+
+            [Restaurants](https://example.com/restaurants) [Shops](https://example.com/shops)
             """
 
         #expect(HTMLToMarkdown.convert(html) == expected)

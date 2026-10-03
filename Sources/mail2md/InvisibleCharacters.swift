@@ -311,6 +311,19 @@ extension InvisibleCharacters {
         return self.isPictographic(scalars[before]) && self.isPictographic(scalars[after])
     }
 
+    /// Whether a text is nothing but emoji, joined, varied or toned as they
+    /// may be. The emitter asks it of an image's alt text, because Outlook
+    /// sends an emoji typed into a message as a picture of it.
+    static func isEmoji(_ text: String) -> Bool {
+        let scalars = text.unicodeScalars
+        guard scalars.contains(where: { self.isPictographic($0) }) else {
+            return false
+        }
+        return scalars.allSatisfy { scalar in
+            return self.isPictographic(scalar) || self.isEmojiAppendage(scalar) || scalar.value == 0x200D
+        }
+    }
+
     /// An emoji character proper. ASCII is excluded, because digits, `#` and
     /// `*` count as emoji only for their keycap sequences.
     fileprivate static func isPictographic(_ scalar: Unicode.Scalar) -> Bool {

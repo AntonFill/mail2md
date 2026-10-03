@@ -13,9 +13,10 @@ import SwiftSoup
 /// It lays the body out the way a browser would, as far as Markdown can
 /// follow: a `div` is a line, a `p` a paragraph, and the element's own style
 /// decides where a browser leaves space. Lists, quotes, tables, rules and code
-/// always stand apart. Hidden elements are dropped, images too, and so are
-/// `script`, `style` and the like. A table holding data becomes a Markdown
-/// table, one used for layout is taken apart into its cells.
+/// always stand apart. Hidden elements are dropped, images too unless they
+/// show an emoji, and so are `script`, `style` and the like. A table holding
+/// data becomes a Markdown table, one used for layout is taken apart into its
+/// rows, whose cells share a line where a browser shows them side by side.
 ///
 /// The goal is readable, AI-ready Markdown, not a rendering: no fonts, no
 /// colours, no stylesheet. The one rule taken from outside the element is a
@@ -24,17 +25,17 @@ import SwiftSoup
 enum HTMLToMarkdown {
 
     static func convert(_ html: String) -> String {
-        guard let body = try? SwiftSoup.parse(html).body() else {
+        guard let body = try? SwiftSoup.parse(self.joiningSurrogateHalves(html)).body() else {
             return html
         }
 
         // Drop non-content nodes before walking the tree. If the selector fails,
-        // script/style/img survive and their content would land silently in the
+        // script/style survive and their content would land silently in the
         // Markdown, so fall back to the raw HTML like the parse failure above:
         // unconverted output is visible, leaked stylesheet text is not.
         do {
             _ = try body
-                .select("script, style, head, title, meta, link, noscript, img, svg")
+                .select("script, style, head, title, meta, link, noscript, svg")
                 .remove()
         }
         catch {
@@ -86,6 +87,26 @@ extension HTMLToMarkdown {
             return
         }
 
+        // What an inline element's own style puts around it, see `frame(of:)`.
+        let frame = self.frame(of: element)
+        if let gaps = frame.gaps {
+            layout.gap(gaps.top)
+        }
+        else if frame.spaceBefore {
+            layout.space()
+        }
+
+        self.renderTag(of: element, into: &layout)
+
+        if let gaps = frame.gaps {
+            layout.gap(gaps.bottom)
+        }
+        else if frame.spaceAfter {
+            layout.space()
+        }
+    }
+
+    fileprivate static func renderTag(of element: Element, into layout: inout Layout) {
         let tag = element.tagName()
         switch tag {
         case "br":
@@ -99,6 +120,8 @@ extension HTMLToMarkdown {
             self.emphasis(element, marker: "*", into: &layout)
         case "a":
             self.link(element, into: &layout)
+        case "img":
+            self.image(element, into: &layout)
         case "code":
             self.inlineCode(element, into: &layout)
         case "ul":
@@ -111,6 +134,10 @@ extension HTMLToMarkdown {
             self.preformatted(element, into: &layout)
         case "table":
             self.table(element, into: &layout)
+        case "tr":
+            self.layoutRow(element, into: &layout)
+        case "th":
+            self.headerCell(element, into: &layout)
         case "hr":
             layout.gap(2)
             layout.writeLines(["---"])
@@ -275,13 +302,22 @@ extension HTMLToMarkdown {
         }
     }
 
-    /// A link as `[text](href)`, its text on one line. A link whose text is
-    /// its own address, give or take the scheme and a closing slash, is
-    /// written as that text: Outlook links every address it prints, and the
-    /// Markdown link would show it twice.
+    /// A link as `[text](href)`, its text on one line and its brackets
+    /// escaped. A link whose text is its own address, give or take the scheme
+    /// and a closing slash, is written as that text: Outlook links every
+    /// address it prints, and the Markdown link would show it twice.
+    ///
+    /// A link around links, a job card or the preview of a repository, is
+    /// taken apart, and its inner links keep their targets: Markdown cannot
+    /// nest links, and the `[[` it wrote opens a wikilink in Obsidian.
     fileprivate static func link(_ element: Element, into layout: inout Layout) {
+        guard self.holdsLink(element) == false else {
+            self.renderChildren(of: element, into: &layout)
+            return
+        }
+
         let content = self.content(of: element)
-        let href = ((try? element.attr("href")) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let href = self.target(of: element)
         let text = content.flattened
 
         guard
@@ -296,8 +332,19 @@ extension HTMLToMarkdown {
         }
 
         layout.place(content.onOneLine) { line in
-            return "[\(line)](\(href))"
+            return "[\(self.escapingBrackets(line))](\(href))"
         }
+    }
+
+    /// A picture is dropped, unless its alt text is nothing but emoji: Outlook
+    /// sends an emoji typed into a message as a picture of it, and the emoji
+    /// is what the reader saw.
+    fileprivate static func image(_ element: Element, into layout: inout Layout) {
+        let alt = ((try? element.attr("alt")) ?? "").trimmingCharacters(in: .whitespaces)
+        guard InvisibleCharacters.isEmoji(alt) else {
+            return
+        }
+        self.write(alt, into: &layout)
     }
 
     fileprivate static func inlineCode(_ element: Element, into layout: inout Layout) {
@@ -379,10 +426,17 @@ extension HTMLToMarkdown {
     /// The rows of a data table, or nil for a layout table.
     ///
     /// A table holds data when it is not marked as presentation, holds no
-    /// table itself, and has at least one row with two filled cells. The last
-    /// test runs on the rendered cells, so a logo beside a signature, an empty
-    /// cell once the image is gone, does not make a table of data. Rows without
-    /// any text are left out, the spacer rows of a layout grid.
+    /// table itself, has two rows of cells or more, and at least one row with
+    /// two filled cells. The last two tests run on the rendered cells, so a
+    /// logo beside a signature, an empty cell once the image is gone, does not
+    /// make a table of data. Rows without any text are left out, the spacer
+    /// rows of a layout grid, and a row that spans the table is a caption, not
+    /// a row of cells.
+    ///
+    /// A single row compares nothing, so it is layout, as in Mozilla's
+    /// Readability: a bar of links, or a whole letter beside its menu, which a
+    /// Markdown table squeezed into one cell (counted on 2026-10-03: 53 tables
+    /// in the archive, and 35 more with a caption above their one row).
     fileprivate static func dataRows(of table: Element) -> [[Cell]]? {
         let role = ((try? table.attr("role")) ?? "").lowercased()
         guard
@@ -411,7 +465,8 @@ extension HTMLToMarkdown {
             }
         }
 
-        let holdsData = rows.contains { row in
+        let rowsOfCells = rows.filter { self.isSpanning($0) == false }
+        let holdsData = rowsOfCells.count >= 2 && rowsOfCells.contains { row in
             return row.filter { $0.isEmpty == false }.count >= 2
         }
         return holdsData ? rows : nil
@@ -487,6 +542,93 @@ extension HTMLToMarkdown {
 
     fileprivate static func isSpanning(_ row: [Cell]) -> Bool {
         return row.count == 1 && row[0].span > 1
+    }
+
+    /// A row of a layout table. A browser shows its cells side by side, so
+    /// where each cell but the last holds one line of text, they share it,
+    /// and the last cell runs on below: a bullet beside its text, the number
+    /// of a step beside its description, a bar of links. A cell that opens
+    /// with a block Markdown marks, a list or a table, cannot share its line,
+    /// and such a row is laid out cell after cell.
+    ///
+    /// Each child is laid out on its own first, to measure the cells, and a
+    /// row that keeps its cells apart replays them, so it comes out exactly
+    /// as if laid out in place.
+    fileprivate static func layoutRow(_ row: Element, into layout: inout Layout) {
+        var parts: [(node: Node, layout: Layout)] = []
+        let children = row.getChildNodes()
+        for child in children {
+            var part = Layout()
+            self.render(child, into: &part)
+            parts.append((child, part))
+        }
+
+        let cells = parts
+            .filter { ["td", "th"].contains(($0.node as? Element)?.tagName() ?? "") }
+            .map { $0.layout }
+            .filter { $0.content.trimmedLines.isEmpty == false }
+        let spacing = self.spacing(of: row)
+
+        guard let shared = self.sharedLine(of: cells) else {
+            layout.gap(spacing.top)
+            for part in parts {
+                layout.replay(part.layout.operations)
+            }
+            layout.gap(spacing.bottom)
+            return
+        }
+
+        layout.gap(max(spacing.top, cells.map { $0.content.gapBefore }.max() ?? 0))
+        layout.write(shared.line)
+        layout.writeLines(shared.rest)
+        layout.gap(max(spacing.bottom, cells.map { $0.content.gapAfter }.max() ?? 0))
+    }
+
+    /// The line the cells of a layout row share and the lines the last one
+    /// runs on with, or nil where they cannot share one.
+    fileprivate static func sharedLine(of cells: [Layout]) -> (line: String, rest: [String])? {
+        guard
+            cells.count >= 2,
+            let last = cells.last,
+            last.opensWithText
+        else {
+            return nil
+        }
+
+        let others = cells.dropLast()
+        let othersAreLines = others.allSatisfy { cell in
+            return cell.content.trimmedLines.count == 1 && cell.holdsFormattedLines == false
+        }
+        guard othersAreLines else {
+            return nil
+        }
+
+        let lastLines = last.content.trimmedLines
+        let firstLines = others.map { $0.content.trimmedLines[0] } + [lastLines[0]]
+        return (firstLines.joined(separator: " "), Array(lastLines.dropFirst()))
+    }
+
+    /// A header cell outside a table of data. A browser sets it in bold, so
+    /// it is bold here too, unless its style sets a lighter weight or it holds
+    /// blocks: an email framework lays out whole columns in header cells and
+    /// sets their weight back in a stylesheet this converter does not read.
+    fileprivate static func headerCell(_ element: Element, into layout: inout Layout) {
+        let weight = self.declarations(of: element)["font-weight"] ?? "bold"
+        let lighter = ["normal", "lighter", "100", "200", "300", "400", "500"]
+        guard
+            self.holdsBlocks(element) == false,
+            lighter.contains(weight) == false
+        else {
+            self.block(element, into: &layout)
+            return
+        }
+
+        let spacing = self.spacing(of: element)
+        layout.gap(spacing.top)
+        layout.place(self.content(of: element)) { line in
+            return self.bold(line)
+        }
+        layout.gap(spacing.bottom)
     }
 }
 
@@ -624,6 +766,80 @@ extension HTMLToMarkdown {
 
         return Double(trimmed).map { $0 * 0.75 }  // a unitless number is pixels
     }
+
+    /// What an inline element's own style puts around it.
+    fileprivate struct Frame {
+        /// The gaps above and below, for an element its style sets as a block.
+        var gaps: (top: Int, bottom: Int)?
+        var spaceBefore = false
+        var spaceAfter = false
+    }
+
+    /// The frame of an element as a browser lays it out. A `display` that
+    /// makes an inline element a block sets it on lines of its own, with the
+    /// gaps its margins give it: a classifieds site sets the links of its
+    /// footer one below the other that way. Room at a side, margin or padding
+    /// from 3pt up, keeps it apart from its neighbour by a space: Wix keeps
+    /// the links of its footer apart that way. Neither had anything else
+    /// between the links, so they ran into each other. A block element has
+    /// its spacing from `spacing(of:)` and no frame.
+    fileprivate static func frame(of element: Element) -> Frame {
+        let tag = element.tagName()
+        guard
+            self.blockTags.contains(tag) == false,
+            self.structuralTags.contains(tag) == false,
+            tag != "br"
+        else {
+            return Frame()
+        }
+
+        let style = self.declarations(of: element)
+        let blockDisplays = ["block", "flex", "grid", "list-item", "table"]
+        if let display = style["display"], blockDisplays.contains(display) {
+            return Frame(gaps: self.spacing(of: element))
+        }
+
+        let room = self.horizontalRoom(style)
+        return Frame(spaceBefore: room.left >= 3, spaceAfter: room.right >= 3)
+    }
+
+    /// The room at the left and the right of an element, margin plus
+    /// padding, in points.
+    fileprivate static func horizontalRoom(_ declarations: [String: String]) -> (left: Double, right: Double) {
+        var left = 0.0
+        var right = 0.0
+
+        let properties = ["margin", "padding"]
+        for property in properties {
+            var sides = self.horizontalSides(declarations[property])
+            if let value = declarations[property + "-left"] {
+                sides.left = self.points(value)
+            }
+            if let value = declarations[property + "-right"] {
+                sides.right = self.points(value)
+            }
+            left += sides.left ?? 0
+            right += sides.right ?? 0
+        }
+
+        return (left, right)
+    }
+
+    /// Left and right of a `margin` or `padding` shorthand: one value is all
+    /// four sides, two and three give both sides second, four give the right
+    /// second and the left last.
+    fileprivate static func horizontalSides(_ shorthand: String?) -> (left: Double?, right: Double?) {
+        guard
+            let values = shorthand?.split(whereSeparator: { $0.isWhitespace }).map(String.init),
+            values.isEmpty == false
+        else {
+            return (nil, nil)
+        }
+
+        let right = self.points(values.count >= 2 ? values[1] : values[0])
+        let left = values.count >= 4 ? self.points(values[3]) : right
+        return (left, right)
+    }
 }
 
 // MARK: - Helpers
@@ -686,6 +902,93 @@ extension HTMLToMarkdown {
         }
     }
 
+    /// Whether a link shows inside the element, one a browser does not hide.
+    fileprivate static func holdsLink(_ element: Element) -> Bool {
+        return element.children().array().contains { child in
+            guard self.isHidden(child) == false else {
+                return false
+            }
+            return (child.tagName() == "a" && self.target(of: child).isEmpty == false) || self.holdsLink(child)
+        }
+    }
+
+    fileprivate static func target(of link: Element) -> String {
+        return ((try? link.attr("href")) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Link text with its square brackets escaped: a bracket would end the
+    /// text early, and a pair at its edge opens a wikilink in Obsidian, as in
+    /// `[[German]](#German)`. Code keeps its brackets, because a backslash
+    /// inside code would show.
+    fileprivate static func escapingBrackets(_ text: String) -> String {
+        var escaped = ""
+        var rest = text[...]
+
+        while let character = rest.first {
+            if character == "`" {
+                let fence = rest.prefix { $0 == "`" }
+                let afterFence = rest[fence.endIndex...]
+                guard let close = afterFence.range(of: fence) else {
+                    escaped += fence
+                    rest = afterFence
+                    continue
+                }
+                escaped += rest[..<close.upperBound]
+                rest = rest[close.upperBound...]
+                continue
+            }
+
+            if character == "[" || character == "]" {
+                escaped += "\\"
+            }
+            escaped.append(character)
+            rest = rest.dropFirst()
+        }
+
+        return escaped
+    }
+
+    /// The HTML with each character beyond the first 65536 that is written as
+    /// its two UTF-16 halves, `&#55358;&#56598;`, written as one reference,
+    /// `&#x1F916;`. The HTML standard reads each half alone as U+FFFD, and a
+    /// chatbot transcript wrote its emoji that way, while the plain form of the
+    /// same mail carries them. A half without its partner is left to the parser.
+    fileprivate static func joiningSurrogateHalves(_ html: String) -> String {
+        let reference = /&#(?:([0-9]{1,7})|[xX]([0-9A-Fa-f]{1,6}));/
+        var joined = ""
+        var rest = html[...]
+
+        while let high = rest.firstMatch(of: reference) {
+            joined += rest[..<high.range.lowerBound]
+            rest = rest[high.range.upperBound...]
+
+            guard
+                let highHalf = self.number(decimal: high.1, hexadecimal: high.2),
+                (0xD800...0xDBFF).contains(highHalf),
+                let low = rest.prefixMatch(of: reference),
+                let lowHalf = self.number(decimal: low.1, hexadecimal: low.2),
+                (0xDC00...0xDFFF).contains(lowHalf)
+            else {
+                joined += high.0
+                continue
+            }
+
+            let scalar = 0x10000 + ((highHalf - 0xD800) << 10) + (lowHalf - 0xDC00)
+            joined += "&#x" + String(scalar, radix: 16, uppercase: true) + ";"
+            rest = rest[low.range.upperBound...]
+        }
+
+        return joined + rest
+    }
+
+    /// The number a character reference stands for.
+    fileprivate static func number(decimal: Substring?, hexadecimal: Substring?) -> Int? {
+        if let decimal {
+            return Int(decimal)
+        }
+        return hexadecimal.flatMap { Int($0, radix: 16) }
+    }
+
     fileprivate static func longestBacktickRun(in text: String) -> Int {
         var longest = 0
         var run = 0
@@ -728,7 +1031,21 @@ extension HTMLToMarkdown {
 /// into the larger one, the way a browser collapses adjoining margins. A gap is
 /// only written once something follows it, so nothing piles up at the edges or
 /// between two empty blocks.
+///
+/// Every call is kept as an operation. What an element asks of a layout
+/// depends on the element alone, never on what the layout holds, so the calls
+/// one layout received can be replayed into another, with the same result as
+/// laying the element out there in the first place.
 fileprivate struct Layout {
+
+    /// A call the layout received.
+    enum Operation {
+        case gap(Int)
+        case write(String)
+        case space(nonBreaking: Bool)
+        case lineBreak
+        case writeLines([String])
+    }
 
     /// A block laid out on its own, for an element to wrap, prefix or flatten.
     struct Content {
@@ -784,6 +1101,8 @@ fileprivate struct Layout {
         }
     }
 
+    private(set) var operations: [Operation] = []
+
     private var lines: [String] = []
     private var current = ""
 
@@ -830,7 +1149,36 @@ fileprivate struct Layout {
         )
     }
 
+    /// Whether its first text was written inline, rather than as lines a
+    /// block formatted itself.
+    var opensWithText: Bool {
+        for operation in self.operations {
+            switch operation {
+            case .write:
+                return true
+            case .writeLines:
+                return false
+            default:
+                continue
+            }
+        }
+        return false
+    }
+
+    /// Whether a block formatted lines of its own into it: a list, a quote, a
+    /// table, a code fence, a heading or a rule.
+    var holdsFormattedLines: Bool {
+        return self.operations.contains { operation in
+            if case .writeLines = operation {
+                return true
+            }
+            return false
+        }
+    }
+
     mutating func gap(_ size: Int) {
+        self.operations.append(.gap(size))
+
         if self.started == false {
             self.leadingGap = max(self.leadingGap, size)
         }
@@ -839,6 +1187,7 @@ fileprivate struct Layout {
 
     /// Inline text, its whitespace already collapsed.
     mutating func write(_ text: String) {
+        self.operations.append(.write(text))
         self.settle()
 
         var piece = Substring(text)
@@ -863,6 +1212,8 @@ fileprivate struct Layout {
     /// is nothing, unless it is a no-break space: that one holds an otherwise
     /// empty line open.
     mutating func space(nonBreaking: Bool = false) {
+        self.operations.append(.space(nonBreaking: nonBreaking))
+
         if self.started == false {
             self.leadingSpace = true
         }
@@ -882,6 +1233,7 @@ fileprivate struct Layout {
 
     /// Ends the current line where a `br` stands, an empty one included.
     mutating func lineBreak() {
+        self.operations.append(.lineBreak)
         self.settle()
         self.commit()
         self.started = true
@@ -895,6 +1247,7 @@ fileprivate struct Layout {
             return
         }
 
+        self.operations.append(.writeLines(block))
         self.settle()
         if self.occupied {
             self.commit()
@@ -932,6 +1285,24 @@ fileprivate struct Layout {
         }
         else if content.spaceAfter {
             self.space()
+        }
+    }
+
+    /// Makes the calls another layout received, in their order.
+    mutating func replay(_ operations: [Operation]) {
+        for operation in operations {
+            switch operation {
+            case .gap(let size):
+                self.gap(size)
+            case .write(let text):
+                self.write(text)
+            case .space(let nonBreaking):
+                self.space(nonBreaking: nonBreaking)
+            case .lineBreak:
+                self.lineBreak()
+            case .writeLines(let block):
+                self.writeLines(block)
+            }
         }
     }
 
