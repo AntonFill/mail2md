@@ -22,7 +22,7 @@ mail2md is a **deterministic converter**. It parses what the mail says and write
 That line is worth knowing before you build something, because it is why some obvious-looking features are not here:
 
 - **No thread splitting.** One `.eml` produces one `.md`. Cutting a quoted chain into one note per message is a judgment call: interleaved replies have no clean boundary, and quote separators are client- and language-specific with no RFC to lean on. Earlier versions did split; it was removed in v0.9.0 because the heuristic was confidently wrong often enough to be worse than nothing.
-- **No boilerplate stripping.** Signatures, legal disclaimers and footers are prose without a reliable marker. Same problem as above.
+- **No boilerplate stripping.** Signatures, legal disclaimers and footers are prose without a reliable marker. Same problem as above. What a mail system writes in behind a marker that never varies is another matter: Exchange's first-contact banner always ends with the same link, so the cleaner removes it.
 - **No vault-specific knowledge.** Filenames, wikilinks, and per-message `via:` chains belong to whoever consumes the output, not to a converter that knows nothing about the target.
 
 Judgment-heavy work belongs to the human or the LLM downstream. Mechanical work belongs here. A pull request that moves the line is welcome as a discussion first.

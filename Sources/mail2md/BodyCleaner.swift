@@ -8,7 +8,9 @@
 import Foundation
 
 /// Post-decode cleanup of a mail body: removes ballast a reader never wants
-/// (angle-bracket `mailto:`/URL duplicates, `cid:` image references) and
+/// (angle-bracket `mailto:`/URL duplicates, `cid:` image references, and
+/// what a mail system wrote in rather than the sender: Exchange's
+/// first-contact banner, links around a quoted picture's file name) and
 /// normalizes whitespace.
 ///
 /// It deliberately leaves untouched the quote structure the source already
@@ -20,8 +22,10 @@ import Foundation
 /// character, blank lines and trailing spaces included, and only the text
 /// around it is cleaned.
 ///
-/// The transforms never drop an address or URL: a `mailto:` wrapper collapses
-/// onto the plain twin that precedes it, or is unwrapped to the bare address.
+/// The address transforms never drop an address or URL: a `mailto:` wrapper
+/// collapses onto the plain twin that precedes it, or is unwrapped to the
+/// bare address. A link goes only with the banner or the picture it belongs
+/// to.
 enum BodyCleaner {
 
     static func clean(_ body: String) -> String {
@@ -75,17 +79,85 @@ extension BodyCleaner {
         text = text.replacing(/[\[<]cid:[^\]>]*[\]>]/, with: "")
 
         // Trailing whitespace per line, then collapse blank-line runs to one.
+        // A line that held nothing but ballast goes as a whole, and with it
+        // one of the blank lines around it, as a browser collapses the margins
+        // around an empty block: where they differ in quote depth, the
+        // shallower one stays, so a quote does not end on an empty line.
         var tidied: [String] = []
+        var skipsBlankLine = false
         let tidiedLines = text.components(separatedBy: "\n")
-        for line in tidiedLines {
+        for (index, line) in tidiedLines.enumerated() {
             let trimmed = line.replacing(/[ \t]+$/, with: "")
-            if trimmed.isEmpty, tidied.last?.isEmpty == true {
+            let kept = self.removingBallast(from: trimmed)
+
+            if kept != trimmed, self.isBlank(kept) {
+                let next = index + 1 < tidiedLines.count ? tidiedLines[index + 1] : ""
+                guard self.isBlank(next) else {
+                    continue
+                }
+                guard let last = tidied.last else {
+                    skipsBlankLine = true
+                    continue
+                }
+                if self.isBlank(last) {
+                    if self.depth(of: next) < self.depth(of: last) {
+                        tidied.removeLast()
+                    }
+                    else {
+                        skipsBlankLine = true
+                    }
+                }
                 continue
             }
-            tidied.append(trimmed)
+
+            if skipsBlankLine {
+                skipsBlankLine = false
+                if self.isBlank(kept) {
+                    continue
+                }
+            }
+            if kept.isEmpty, tidied.last?.isEmpty == true {
+                continue
+            }
+            tidied.append(kept)
         }
 
         return tidied
+    }
+
+    /// The line without what a mail system wrote into it rather than the
+    /// sender, behind a marker that never varies.
+    ///
+    /// Exchange's first-contact banner takes the whole line: a sentence in
+    /// the reader's language ending with a link to Microsoft's page on sender
+    /// identification, which is the marker (8 of 716 archive mails, 2026-10-03).
+    ///
+    /// A link around a picture's file name in angle brackets goes, link and
+    /// all: Apple Mail quotes a picture as its name, and a linked one is a
+    /// social icon or a logo in a quoted signature, the kind the emitter drops
+    /// as a picture (204 links in 35 mails). The name alone stays: unlinked,
+    /// it is often the trace of a photo the quoted mail carried
+    /// (`<Mail-Anhang.jpeg>`, 23 photos in one mail), just as `<name.pdf>` is
+    /// the trace of a document.
+    fileprivate static func removingBallast(from line: String) -> String {
+        let senderIdentification = /(?:\]\(|<)https:\/\/aka\.ms\/LearnAboutSenderIdentification\/?(?:\)|>)$/.ignoresCase()
+        guard line.contains(senderIdentification) == false else {
+            return ""
+        }
+
+        return line
+            .replacing(/\[<[^<>\]\n]+\.(?:png|jpe?g|gif|bmp|tiff?|heic|webp)>\]\([^)\s]*\)[ \t]*/.ignoresCase(), with: "")
+            .replacing(/[ \t]+$/, with: "")
+    }
+
+    /// Whether a line holds no text: empty, or nothing but quote markers.
+    fileprivate static func isBlank(_ line: String) -> Bool {
+        return line.allSatisfy { $0 == ">" || $0 == " " || $0 == "\t" }
+    }
+
+    /// The quote depth of a blank line: its number of quote markers.
+    fileprivate static func depth(of line: String) -> Int {
+        return line.filter { $0 == ">" }.count
     }
 
     /// Splits the lines into runs of text and fenced code blocks. Only a fence

@@ -96,7 +96,7 @@ A named document that Apple Mail dispositions as `inline` rather than `attachmen
 
 `created` is rendered in the reader's local time, not the sender's. The `Date:` header is parsed tolerantly: trailing comments like `+0000 (UTC)`, a missing weekday or seconds, and obsolete alphabetic zones are all handled, and a header that still cannot be parsed produces a warning rather than a silently empty `created`.
 
-Bodies pass through a lossless cleanup: angle-bracket duplicates of mail and web addresses are collapsed onto their plain twin, `cid:` image references are dropped, and runs of blank lines are normalised. Quote depth (`>`) is never touched, so the structure the mail carried survives.
+Bodies pass through a lossless cleanup: angle-bracket duplicates of mail and web addresses are collapsed onto their plain twin, `cid:` image references are dropped, as are two things a mail system writes in rather than the sender (the banner Exchange puts above mail from a new sender, "You don't often get email from …", and a link around a quoted picture's file name, such as a social icon in an old signature), and runs of blank lines are normalised. Quote depth (`>`) is never touched, so the structure the mail carried survives.
 
 All diagnostics, including `--verbose` progress, go to stderr. The product is the Markdown file, so stdout carries only genuine data (today just `--version`) and `2>/dev/null` silences the tool without hiding anything else.
 

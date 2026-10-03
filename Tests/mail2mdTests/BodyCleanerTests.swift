@@ -59,6 +59,95 @@ struct BodyCleanerTests {
         #expect(BodyCleaner.clean(input) == "Grüsse\n\nAndré")
     }
 
+    @Test func removesExchangesFirstContactBanner() {
+        // Exchange writes it into the mail it receives; the sender never did.
+        let input = """
+            Sie erhalten nicht oft eine E-Mail von hr@example.com. [Erfahren Sie, warum dies wichtig ist](https://aka.ms/LearnAboutSenderIdentification)
+
+            Sehr geehrter Herr Muster
+            """
+        #expect(BodyCleaner.clean(input) == "Sehr geehrter Herr Muster")
+    }
+
+    @Test func removesTheBannerInAQuoteWithOneOfItsBlankLines() {
+        let input = """
+            > Grüsse
+            >
+            > You don't often get email from hr@example.com. [Learn why this is important](https://aka.ms/LearnAboutSenderIdentification)
+            >
+            > Sehr geehrte Damen und Herren
+            """
+        #expect(BodyCleaner.clean(input) == "> Grüsse\n>\n> Sehr geehrte Damen und Herren")
+    }
+
+    @Test func removesTheBannerInItsPlainForm() {
+        let input = """
+            Sie erhalten nicht häufig E-Mails von hr@example.com. Erfahren Sie, warum dies wichtig ist<https://aka.ms/LearnAboutSenderIdentification>
+            > Sie erhalten nicht oft eine E-Mail von hr@example.com. Erfahren Sie, warum dies wichtig ist <https://aka.ms/LearnAboutSenderIdentification>
+            Sehr geehrte Damen und Herren
+            """
+        #expect(BodyCleaner.clean(input) == "Sehr geehrte Damen und Herren")
+    }
+
+    @Test func keepsALineThatGoesOnAfterTheBannerLink() {
+        // The banner ends with its link; a line that goes on is somebody's text.
+        let input = "[Warum?](https://aka.ms/LearnAboutSenderIdentification) fragt Microsoft."
+        #expect(BodyCleaner.clean(input) == input)
+    }
+
+    @Test func dropsALinkAroundAPicturePlaceholder() {
+        // Apple Mail quotes a picture as its file name in angle brackets, and
+        // a linked one, a social icon in a signature, keeps its link.
+        let input = """
+            > Grüsse
+            >
+            > [<image001.png>](https://example.com/linkedin) [<image002.png>](https://example.com/xing)
+            >
+            > ___________________________
+            """
+        #expect(BodyCleaner.clean(input) == "> Grüsse\n>\n> ___________________________")
+    }
+
+    @Test func keepsTheTextBesideALinkedPlaceholder() {
+        let input = "> [<image447521.PNG>](https://example.com/) Jana Muster | Beraterin"
+        #expect(BodyCleaner.clean(input) == "> Jana Muster | Beraterin")
+    }
+
+    @Test func keepsAPlaceholderThatIsNotALinkedPicture() {
+        // Unlinked, it is often the trace of a photo or a document the quoted
+        // mail carried, like the PDF beside it; and a document is no picture,
+        // linked or not.
+        let input = "> <Mail-Anhang.jpeg>\n> <Lebenslauf.pdf>\n> [<Preisliste.pdf>](https://example.com/preise)"
+        #expect(BodyCleaner.clean(input) == input)
+    }
+
+    @Test func leavesNoGapWhereTextSurroundsARemovedLine() {
+        let input = "> Grüsse\n> [<image001.png>](https://example.com/a)\n> Jana Muster"
+        #expect(BodyCleaner.clean(input) == "> Grüsse\n> Jana Muster")
+    }
+
+    @Test func keepsTheOnlyBlankLineBesideARemovedLine() {
+        // Text above it and a blank line below: that blank line is the
+        // paragraph break, and nothing doubles it.
+        let input = "> Grüsse\n> [<image001.png>](https://example.com/a)\n>\n> Jana Muster"
+        #expect(BodyCleaner.clean(input) == "> Grüsse\n>\n> Jana Muster")
+    }
+
+    @Test func keepsTheShallowerBlankLineWhereAQuoteEnds() {
+        let input = "> Grüsse\n>\n> [<image001.png>](https://example.com/a)\n\nNeuer Absatz"
+        #expect(BodyCleaner.clean(input) == "> Grüsse\n\nNeuer Absatz")
+    }
+
+    @Test func endsTheBodyWithoutAnEmptyQuoteLine() {
+        let input = "> Grüsse\n>\n> [<image001.png>](https://example.com/a)"
+        #expect(BodyCleaner.clean(input) == "> Grüsse")
+    }
+
+    @Test func startsTheBodyWithoutAnEmptyQuoteLine() {
+        let input = "> [<image001.png>](https://example.com/a)\n>\n> Grüsse"
+        #expect(BodyCleaner.clean(input) == "> Grüsse")
+    }
+
     @Test func collapsesBlankLineRunsAndTrailingWhitespace() {
         #expect(
             BodyCleaner.clean("Absatz eins.   \n\n\n\nAbsatz zwei.")
