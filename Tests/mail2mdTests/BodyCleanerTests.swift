@@ -50,6 +50,23 @@ struct BodyCleanerTests {
         #expect(elapsed < .seconds(1))
     }
 
+    /// The cleaner looks at every line of a body, and in 1.2.1 it built four
+    /// regexes for each one: the median mail of the archive took 48 instead of
+    /// 20 ms (measured 2026-10-04). A regex now runs only on a line that holds
+    /// what it looks for, and these 4'000 lines, which hold nothing of it, take
+    /// 27 ms in a debug build instead of 2.35 s.
+    @Test func cleansManyOrdinaryLinesQuickly() {
+        let body = Array(repeating: "Eine gewöhnliche Zeile ohne Ballast.", count: 2_000).joined(separator: "\n\n")
+
+        var cleaned = ""
+        let elapsed = ContinuousClock().measure {
+            cleaned = BodyCleaner.clean(body)
+        }
+
+        #expect(cleaned == body)
+        #expect(elapsed < .milliseconds(500))
+    }
+
     @Test func collapsesDuplicateURL() {
         #expect(BodyCleaner.clean("https://example.com/x<https://example.com/x>") == "https://example.com/x")
     }
@@ -67,6 +84,16 @@ struct BodyCleanerTests {
             Sehr geehrter Herr Muster
             """
         #expect(BodyCleaner.clean(input) == "Sehr geehrter Herr Muster")
+    }
+
+    /// The marker is matched whatever the case of its link, and so is the
+    /// check that lets a line reach the pattern: one stricter than the pattern
+    /// would switch it off without a word. The archive writes the link one
+    /// way only (14 times, 2026-10-04).
+    @Test func removesTheBannerWhateverTheCaseOfItsLink() {
+        let input = "You don't often get email from hr@example.com. [Learn why this is important](https://aka.ms/learnaboutsenderidentification)\n\nDear Sir"
+
+        #expect(BodyCleaner.clean(input) == "Dear Sir")
     }
 
     @Test func removesTheBannerInAQuoteWithOneOfItsBlankLines() {

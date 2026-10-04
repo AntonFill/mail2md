@@ -87,7 +87,8 @@ extension BodyCleaner {
         var skipsBlankLine = false
         let tidiedLines = text.components(separatedBy: "\n")
         for (index, line) in tidiedLines.enumerated() {
-            let trimmed = line.replacing(/[ \t]+$/, with: "")
+            let endsInWhitespace = line.hasSuffix(" ") || line.hasSuffix("\t")
+            let trimmed = endsInWhitespace ? line.replacing(/[ \t]+$/, with: "") : line
             let kept = self.removingBallast(from: trimmed)
 
             if kept != trimmed, self.isBlank(kept) {
@@ -139,10 +140,22 @@ extension BodyCleaner {
     /// it is often the trace of a photo the quoted mail carried
     /// (`<Mail-Anhang.jpeg>`, 23 photos in one mail), just as `<name.pdf>` is
     /// the trace of a document.
+    ///
+    /// Each pattern runs only on a line that holds its marker. A regex is
+    /// built anew wherever it is used, and run on every line of every mail the
+    /// two patterns took the median mail of the archive from 20 to 48 ms
+    /// (measured 2026-10-04). The line comes in without trailing whitespace,
+    /// which `tidy` strips only from a line that ends in some, for the same
+    /// reason.
     fileprivate static func removingBallast(from line: String) -> String {
-        let senderIdentification = /(?:\]\(|<)https:\/\/aka\.ms\/LearnAboutSenderIdentification\/?(?:\)|>)$/.ignoresCase()
-        guard line.contains(senderIdentification) == false else {
-            return ""
+        if line.range(of: "aka.ms/LearnAboutSenderIdentification", options: .caseInsensitive) != nil {
+            let senderIdentification = /(?:\]\(|<)https:\/\/aka\.ms\/LearnAboutSenderIdentification\/?(?:\)|>)$/.ignoresCase()
+            guard line.contains(senderIdentification) == false else {
+                return ""
+            }
+        }
+        guard line.contains("[<") else {
+            return line
         }
 
         return line
