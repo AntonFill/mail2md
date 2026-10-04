@@ -15,6 +15,7 @@ mail2md Mail.eml --force                 # overwrite output files that differ fr
 mail2md Mail.eml --extract-attachments   # also write attachment files alongside the output
 mail2md Mail.eml --attachments-dir ./att # write attachments into ./att (implies extraction)
 mail2md Mail.eml --attachment-name "{date} {time} ENCL {name}"   # rename them as they are written
+mail2md Mail.eml --inline-images         # also write the pictures the mail shows and embed them in place
 mail2md Mail.eml --verbose               # report what was parsed and written
 mail2md --version
 mail2md --help
@@ -72,6 +73,42 @@ Gesendet von Outlook für iOS
 
 The note is written before the attachments, so a note that would be overwritten stops the run while the attachment directory is still untouched.
 
+## Inline images
+
+A picture a mail shows from one of its own parts, through a `cid:` address, may be the screenshot the message is about or the logo in a signature, and nothing in the mail tells the two apart reliably: across 716 real mails, social icons were stored at 2636 × 2636 pixels and signature banners had the shape of screenshots. So mail2md does not guess. By default it leaves these pictures out of the note and names each one on stderr, with the size a browser shows it at:
+
+```
+mail2md: Mail.eml: inline images left out: image001.png 474×464, image002.png 24×24 (use --inline-images to include them)
+```
+
+`--inline-images` writes every one of them as a file, like an attachment and under the same naming pattern, and embeds it where the mail shows it. Whoever reads the note keeps what is content and deletes the rest.
+
+```sh
+mail2md Mail.eml --inline-images --attachments-dir ./attachments \
+  --attachment-name "{date:yyyy.MM.dd} {time:HH.mm} ENCL {name}"
+```
+
+```markdown
+attachments:
+  - "[[2026.09.07 10.00 ENCL image001.png]]"
+  - "[[2026.09.07 10.00 ENCL image002.png]]"
+---
+
+Hallo Anton,
+
+hier der Ausschnitt aus dem Portal:
+
+![[2026.09.07 10.00 ENCL image001.png]]
+
+Gruss
+Jane
+![[2026.09.07 10.00 ENCL image002.png|LinkedIn]]
+```
+
+The alt text becomes the embed's alias where it says something about the picture, so not where it is empty, a file name, or the description Office writes in by itself. A link around a picture is dropped and the picture stays, because Obsidian does not show an embed inside a link; the links around pictures in that archive led from logos and icons. Embedding changes no layout: whether a table holds data is decided as if its pictures were not there, so a logo beside a signature does not turn it into one.
+
+A picture Apple Mail places in the middle of a message arrives as a part of its own, between two pieces of text. That one counts as an attachment, listed and extracted like a document placed there.
+
 ## How it compares
 
 **The Obsidian plugins mostly view rather than convert.** MSG Handler, EML Email Viewer, Email Reader and Embed EML render the mail inside Obsidian, but the file stays an `.eml`. It never becomes a note, and one of them states outright that its content does not reach Obsidian's global search.
@@ -82,7 +119,7 @@ mail2md writes the metadata as YAML frontmatter, so the output is a note first a
 
 It is also built to be fast and unremarkable to use. Across 716 real mails the median conversion takes under 30 ms on an M1, there is nothing to configure, and nothing has to be running.
 
-**[Postbox](https://github.com/istefox/Postbox)** is the closest alternative, and parts of it are better: it renders inline `cid:` images, reads `.msg`, and de-duplicates by Message-ID. It is an Obsidian plugin, so it is desktop-only and Obsidian has to be open. mail2md is the better fit when the conversion should happen without Obsidian in the loop: in a shell pipeline, a cron job, a Makefile, or on a machine with no GUI.
+**[Postbox](https://github.com/istefox/Postbox)** is the closest alternative, and parts of it are better: it reads `.msg` and de-duplicates by Message-ID. It is an Obsidian plugin, so it is desktop-only and Obsidian has to be open. mail2md is the better fit when the conversion should happen without Obsidian in the loop: in a shell pipeline, a cron job, a Makefile, or on a machine with no GUI.
 
 ## Status
 
@@ -92,7 +129,7 @@ HTML is laid out the way a browser shows it: a table of data becomes a Markdown 
 
 Invisible characters that never belong in running text are removed: the zero-width fillers behind that preview text, Unicode tag characters outside a flag, a stray zero-width space or byte order mark. Those that can belong there but also change how text reads, a zero-width joiner outside an emoji, direction marks and bidi controls, stay and are counted. Either way one line on stderr says what was found, so text a reader cannot see does not reach a vault, or a language model reading it, unnoticed.
 
-A named document that Apple Mail dispositions as `inline` rather than `attachment` still counts as an attachment, since that is how a real PDF often arrives. Inline *images* do not: a named inline image is a signature logo or a tracking pixel far more often than a file someone meant to send.
+A named document that Apple Mail dispositions as `inline` rather than `attachment` still counts as an attachment, since that is how a real PDF often arrives, and so does a picture Apple Mail places between two pieces of text. Any other inline image is no attachment but a picture the message shows in its place: left out and named, or embedded with `--inline-images` (see Inline images).
 
 `created` is rendered in the reader's local time, not the sender's. The `Date:` header is parsed tolerantly: trailing comments like `+0000 (UTC)`, a missing weekday or seconds, and obsolete alphabetic zones are all handled, and a header that still cannot be parsed produces a warning rather than a silently empty `created`.
 

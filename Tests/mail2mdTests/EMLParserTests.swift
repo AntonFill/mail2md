@@ -524,6 +524,71 @@ struct AttachmentsTests {
         #expect(message.attachmentNames.contains("embedded.pdf") == false)
     }
 
+    /// Apple Mail sends a picture placed in the middle of the text as a part of
+    /// its own between the two halves. The text around it makes it part of the
+    /// message, like a document placed there, so it is listed and extracted.
+    @Test func listsAPictureBetweenTwoPartsOfTheText() {
+        let message = EMLParser().parse(splitImageEML)
+
+        #expect(message.attachmentNames == ["PastedGraphic-1.png"])
+        #expect(EMLParser().attachmentParts(from: splitImageEML).map { $0.filename } == ["PastedGraphic-1.png"])
+        // The text on both sides still makes up the body.
+        #expect(message.body == "Guten Tag, hier der Ausschnitt:\n\nFreundliche Grüsse")
+    }
+
+    /// The rule is structural, so each condition is pinned by a neighbour that
+    /// misses only it: text on one side only is a logo after a newsletter, a
+    /// `Content-ID` makes the picture a resource of the HTML, and only `mixed`
+    /// sets its parts one after the other.
+    @Test(arguments: [
+        splitImageMail(textBefore: false),
+        splitImageMail(textAfter: false),
+        splitImageMail(contentID: "<ausschnitt@example.com>"),
+        splitImageMail(container: "multipart/related"),
+    ])
+    func leavesAPictureOutsideTheTextUnlisted(eml: String) {
+        #expect(EMLParser().parse(eml).attachments.isEmpty)
+    }
+
+    /// Two pictures placed in one message leave a piece of text between them.
+    /// That piece is the body, not an attachment between text.
+    @Test func readsTheTextBetweenTwoPicturesAsBody() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGM4AQAAygDJmcpdfgAAAABJRU5ErkJggg=="
+        let eml = """
+            Content-Type: multipart/mixed; boundary="b"\r
+            \r
+            --b\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            Vorher\r
+            --b\r
+            Content-Type: image/png\r
+            Content-Disposition: inline; filename="IMG_0001.png"\r
+            Content-Transfer-Encoding: base64\r
+            \r
+            \(png)\r
+            --b\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            Dazwischen\r
+            --b\r
+            Content-Type: image/png\r
+            Content-Disposition: inline; filename="IMG_0002.png"\r
+            Content-Transfer-Encoding: base64\r
+            \r
+            \(png)\r
+            --b\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            Nachher\r
+            --b--\r
+            """
+        let message = EMLParser().parse(eml)
+
+        #expect(message.attachmentNames == ["IMG_0001.png", "IMG_0002.png"])
+        #expect(message.body == "Vorher\n\nDazwischen\n\nNachher")
+    }
+
     @Test func extractsNamedInlineDocument() throws {
         let parts = EMLParser().attachmentParts(from: inlineDocumentEML)
 
@@ -553,6 +618,109 @@ struct AttachmentsTests {
         #expect(parseContentType("application/x-pkcs7-mime").isSMIMEArtifact)
         // A real attachment type is not an S/MIME artifact.
         #expect(parseContentType("application/pdf").isSMIMEArtifact == false)
+    }
+}
+
+// MARK: -
+
+/// The pictures the body shows from parts of the mail: noted while the body is
+/// read, found again among the parts by their `Content-ID`, and embedded in
+/// their place once the caller names their files.
+struct InlineImagePartsTests {
+
+    @Test func notesThePicturesTheBodyShowsInTheirOrder() {
+        let message = EMLParser().parse(inlineImageEML)
+
+        #expect(message.inlineImages == [
+            InlineImage(contentID: "image001.png@01DC1234.5678ABCD", width: 474, height: 464),
+            InlineImage(contentID: "image002.png@01DC1234.5678ABCD", width: nil, height: nil),
+        ])
+        #expect(message.body == "Hallo Anton,\n\nhier der Ausschnitt aus dem Portal:\n\nGruss\nJane")
+        // A picture shown in its place is no attachment.
+        #expect(message.attachments.isEmpty)
+    }
+
+    /// Any part can carry a `Content-ID`, and a mailer may send a picture as
+    /// `application/octet-stream`. The address is kept without its brackets,
+    /// and the parts are found in nested containers too.
+    @Test func findsEveryPartThatCarriesAContentID() {
+        let parts = EMLParser().partsByContentID(from: referencedAttachmentEML)
+
+        #expect(parts.keys.sorted() == ["logo.png"])
+        #expect(parts["logo.png"]?.mediaType == "application/octet-stream")
+        #expect(EMLParser().partsByContentID(from: pictureOnlyEML).keys.sorted() == ["scan@example.com"])
+    }
+
+    /// Two parts with the same address break RFC 2392; the first one is the
+    /// part the address names.
+    @Test func takesTheFirstPartWhereTwoShareAContentID() {
+        let eml = """
+            Content-Type: multipart/related; boundary="b"\r
+            \r
+            --b\r
+            Content-Type: text/html\r
+            \r
+            <img src="cid:logo@example.com">\r
+            --b\r
+            Content-Type: image/png; name="erstes.png"\r
+            Content-ID: <logo@example.com>\r
+            \r
+            x\r
+            --b\r
+            Content-Type: image/png; name="zweites.png"\r
+            Content-ID: <logo@example.com>\r
+            \r
+            y\r
+            --b--\r
+            """
+
+        #expect(EMLParser().partsByContentID(from: eml)["logo@example.com"]?.filename == "erstes.png")
+    }
+
+    /// Each picture once, in the order the body shows it, and only where the
+    /// mail carries its part.
+    @Test func pairsEachPictureWithItsPartOnceInTheOrderShown() {
+        let images = [
+            InlineImage(contentID: "image002.png@01DC1234.5678ABCD", width: nil, height: nil),
+            InlineImage(contentID: "image001.png@01DC1234.5678ABCD", width: 474, height: 464),
+            InlineImage(contentID: "image002.png@01DC1234.5678ABCD", width: 24, height: 24),
+            InlineImage(contentID: "fehlt@example.com", width: nil, height: nil),
+        ]
+        let pairs = EMLParser().inlineImageParts(of: images, from: inlineImageEML)
+
+        #expect(pairs.map { $0.part.filename } == ["image002.png", "image001.png"])
+        #expect(pairs.map { $0.image.width } == [nil, 474])
+    }
+
+    /// A picture whose part is an attachment of its own is listed already, so
+    /// it is not paired a second time.
+    @Test func leavesOutAPictureThatIsAnAttachment() {
+        let message = EMLParser().parse(referencedAttachmentEML)
+
+        #expect(message.attachmentNames == ["logo.png"])
+        #expect(message.inlineImages.map { $0.contentID } == ["logo.png"])
+        #expect(EMLParser().inlineImageParts(of: message.inlineImages, from: referencedAttachmentEML).isEmpty)
+    }
+
+    @Test func embedsThePicturesWhereTheBodyShowsThemOnceTheirFilesAreNamed() {
+        let parser = EMLParser(imageNames: [
+            "image001.png@01DC1234.5678ABCD": "image001.png",
+            "image002.png@01DC1234.5678ABCD": "image002.png",
+        ])
+
+        #expect(parser.parse(inlineImageEML).body == "Hallo Anton,\n\nhier der Ausschnitt aus dem Portal:\n\n![[image001.png]]\n\nGruss\nJane\n![[image002.png|LinkedIn]]")
+    }
+
+    /// An HTML form that shows nothing but a picture gives way to the plain
+    /// form while the picture is left out, and its picture is still noted, so
+    /// the run can name it. Embedded, the picture is something to show, and
+    /// the HTML form is read, as a mail client shows it.
+    @Test func notesThePictureOfAnHTMLFormThatGivesWay() {
+        let message = EMLParser().parse(pictureOnlyEML)
+
+        #expect(message.body == "Siehe Bild.")
+        #expect(message.inlineImages.map { $0.contentID } == ["scan@example.com"])
+        #expect(EMLParser(imageNames: ["scan@example.com": "scan.png"]).parse(pictureOnlyEML).body == "![[scan.png]]")
     }
 }
 

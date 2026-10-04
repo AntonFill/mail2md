@@ -139,6 +139,68 @@ struct Mail2mdTests {
         #expect(FileManager.default.fileExists(atPath: attachments.path) == false)
     }
 
+    // MARK: - Inline images
+
+    /// A picture the note leaves out is named on stderr with the size it is
+    /// shown at, so a screenshot is not lost without a word. The icon's size
+    /// comes from its file, since the HTML gives none.
+    @Test func namesTheInlineImagesItLeavesOut() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(inlineImageEML, named: "profil.eml")
+
+        let run = try command.run([input.path])
+
+        #expect(run.exitCode == 0)
+        #expect(run.standardOutput.isEmpty)
+        #expect(run.standardError == "mail2md: \(input.path): inline images left out: image001.png 474×464, image002.png 1×1 (use --inline-images to include them)\n")
+        #expect(try command.read("profil.md").contains("![[") == false)
+    }
+
+    /// `--inline-images` writes each picture as a file and embeds it where the
+    /// mail shows it, under the naming pattern like any attachment.
+    @Test func embedsInlineImagesWhereTheMailShowsThem() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(inlineImageEML, named: "profil.eml")
+        let files = command.path("files")
+
+        let run = try command.run([
+            "--inline-images",
+            "--attachments-dir", files.path,
+            "--attachment-name", "{date:yyyy.MM.dd} {time:HH.mm} ENCL {name}",
+            input.path,
+        ])
+
+        // The mail is dated 7 Sep 2026 10:00 +0200, and TZ is pinned to UTC.
+        #expect(run.exitCode == 0)
+        #expect(run.standardError.isEmpty)
+        #expect(command.exists("files/2026.09.07 08.00 ENCL image001.png"))
+        #expect(command.exists("files/2026.09.07 08.00 ENCL image002.png"))
+        let note = try command.read("profil.md")
+        #expect(note.contains("attachments:\n  - \"[[2026.09.07 08.00 ENCL image001.png]]\"\n  - \"[[2026.09.07 08.00 ENCL image002.png]]\"\n---\n"))
+        #expect(note.hasSuffix("Portal:\n\n![[2026.09.07 08.00 ENCL image001.png]]\n\nGruss\nJane\n![[2026.09.07 08.00 ENCL image002.png|LinkedIn]]\n"))
+    }
+
+    /// A picture whose part is an attachment as well is written once, next to
+    /// the note by default, embedded where the mail shows it and not repeated
+    /// below the text.
+    @Test func writesAPictureThatIsAnAttachmentOnce() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(referencedAttachmentEML, named: "adresse.eml")
+
+        let run = try command.run(["--inline-images", input.path])
+
+        #expect(run.exitCode == 0)
+        #expect(run.standardError.isEmpty)
+        let entries = try FileManager.default.contentsOfDirectory(atPath: command.workspace.path).filter { $0 != "streams" }
+        #expect(entries.sorted() == ["adresse.eml", "adresse.md", "logo.png"])
+        let note = try command.read("adresse.md")
+        #expect(note.contains("attachments:\n  - \"[[logo.png]]\"\n---\n"))
+        #expect(note.hasSuffix("Ihre Adresse wurde geändert.\n\n![[logo.png]]\n"))
+    }
+
     // MARK: - Writing twice
 
     @Test func secondRunReportsUnchanged() throws {

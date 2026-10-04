@@ -21,6 +21,10 @@ struct EmailMessage {
     let body: String
     let attachments: [Attachment]  // attachment parts, in document order
 
+    /// The pictures the body shows from parts of the mail, through `cid:`, in
+    /// the order it shows them.
+    let inlineImages: [InlineImage]
+
     /// What the invisible-character rule found in the headers and the body
     /// together, for the run to report.
     let invisibleCharacters: InvisibleCharacters.Report
@@ -33,7 +37,8 @@ struct EmailMessage {
 ///
 /// The name is the mail's own filename until the attachment is actually written
 /// to disk; from then on it is the name on disk, which is what a link has to
-/// point at. `EmailMessage.replacingAttachments` performs that swap.
+/// point at. `EmailMessage.replacingAttachments` performs that swap, and it
+/// adds the pictures embedded in the body, which are files of the note too.
 struct Attachment {
     let name: String
     let mediaType: String
@@ -43,10 +48,16 @@ struct Attachment {
     /// still says what the sender called the thing.
     let sourceName: String
 
-    init(name: String, mediaType: String, sourceName: String? = nil) {
+    /// Whether the body shows the attachment where the mail placed it, a
+    /// picture embedded from its file. The note lists it like any other, but
+    /// does not show it a second time below the text.
+    let isEmbedded: Bool
+
+    init(name: String, mediaType: String, sourceName: String? = nil, isEmbedded: Bool = false) {
         self.name = name
         self.mediaType = mediaType
         self.sourceName = sourceName ?? name
+        self.isEmbedded = isEmbedded
     }
 
     /// Whether the attachment is an image, and can therefore be shown rather
@@ -59,14 +70,11 @@ struct Attachment {
 // MARK: -
 extension EmailMessage {
 
-    /// The same message with its attachments renamed, keeping their order and
-    /// media types. Used after extraction, so the note lists and links the
-    /// files that were really written instead of the names the mail carried.
-    func replacingAttachments(withNames names: [String]) -> EmailMessage {
-        let renamed = zip(self.attachments, names).map { attachment, name in
-            return Attachment(name: name, mediaType: attachment.mediaType, sourceName: attachment.sourceName)
-        }
-
+    /// The same message with the attachments a run is writing. Used for an
+    /// extraction, so the note lists and links the files that are really
+    /// written, under their names on disk instead of the names the mail
+    /// carried, and with the pictures embedded in the body among them.
+    func replacingAttachments(with attachments: [Attachment]) -> EmailMessage {
         return EmailMessage(
             from: self.from,
             to: self.to,
@@ -76,7 +84,8 @@ extension EmailMessage {
             timeZone: self.timeZone,
             messageID: self.messageID,
             body: self.body,
-            attachments: renamed,
+            attachments: attachments,
+            inlineImages: self.inlineImages,
             invisibleCharacters: self.invisibleCharacters
         )
     }
@@ -89,6 +98,20 @@ struct AttachmentPart {
     let filename: String?
     let mediaType: String
     let entity: MIMEEntity
+
+    /// The `Content-ID` an HTML body addresses the part by, without its angle
+    /// brackets, or nil where it carries none.
+    var contentID: String? {
+        guard let header = self.entity.headers["content-id"] else {
+            return nil
+        }
+
+        var contentID = header.trimmingCharacters(in: .whitespaces)
+        if contentID.hasPrefix("<"), contentID.hasSuffix(">") {
+            contentID = String(contentID.dropFirst().dropLast())
+        }
+        return contentID.isEmpty ? nil : contentID
+    }
 }
 
 /// Parses RFC 5322 (.eml) files.
@@ -102,14 +125,22 @@ struct EMLParser {
     /// How the text this parser is given stands for the bytes of the file.
     let source: SourceText
 
-    init(source: SourceText = .utf8) {
+    /// The file each picture the body shows from a part of the mail was
+    /// written to, by the `Content-ID` of that part, for the body to embed it
+    /// in its place. Empty unless the pictures were asked for, and then a
+    /// picture is left out of the body, as it always was.
+    let imageNames: [String: String]
+
+    init(source: SourceText = .utf8, imageNames: [String: String] = [:]) {
         self.source = source
+        self.imageNames = imageNames
     }
 
     func parse(_ raw: String) -> EmailMessage {
         let (headerBlock, rawBody) = self.splitHeadersAndBody(raw)
         let headers = self.parseHeaders(headerBlock)
-        let body = self.extractBody(headers: headers, rawBody: rawBody)
+        var images: [InlineImage] = []
+        let body = self.extractBody(headers: headers, rawBody: rawBody, images: &images)
         let parsedDate = headers["date"].flatMap { self.parseDate($0) }
 
         // Every text the note shows passes the invisible-character rule, the
@@ -139,6 +170,7 @@ struct EMLParser {
             messageID: headers["message-id"],
             body: cleanBody,
             attachments: self.attachments(headers: headers, rawBody: rawBody),
+            inlineImages: images,
             invisibleCharacters: report
         )
     }
@@ -149,8 +181,13 @@ extension EMLParser {
 
     /// Selects and decodes the body of a message, as text or as Markdown
     /// converted from HTML.
-    func extractBody(headers: [String: String], rawBody: String) -> String {
-        if let text = self.plainText(headers: headers, rawBody: rawBody) {
+    ///
+    /// `images` collects the pictures from parts of the mail that the HTML
+    /// read on the way shows: those of the body, and those of an HTML form
+    /// that gave way because it showed nothing else, so a picture that the
+    /// note leaves out can still be named.
+    func extractBody(headers: [String: String], rawBody: String, images: inout [InlineImage]) -> String {
+        if let text = self.plainText(headers: headers, rawBody: rawBody, images: &images) {
             return text
         }
 
@@ -175,11 +212,11 @@ extension EMLParser {
     /// after the other, so its body parts are joined in document order: Apple
     /// Mail splits the text around an attachment placed in the middle of it,
     /// and taking only the first piece dropped the rest without a word.
-    func plainText(headers: [String: String], rawBody: String) -> String? {
+    func plainText(headers: [String: String], rawBody: String, images: inout [InlineImage]) -> String? {
         let contentType = parseContentType(headers["content-type"])
 
         guard contentType.mediaType.hasPrefix("multipart/") else {
-            return self.renderedText(MIMEEntity(headers: headers, rawBody: rawBody, source: self.source))
+            return self.renderedText(MIMEEntity(headers: headers, rawBody: rawBody, source: self.source), images: &images)
         }
 
         guard let boundary = contentType.boundary else {
@@ -189,11 +226,11 @@ extension EMLParser {
         let bodyParts = entities.filter { self.isBodyPart($0) }
 
         if contentType.mediaType == "multipart/alternative" {
-            return self.preferredAlternative(bodyParts)
+            return self.preferredAlternative(bodyParts, images: &images)
         }
 
         let segments = bodyParts
-            .compactMap { self.bodyText(of: $0) }
+            .compactMap { self.bodyText(of: $0, images: &images) }
             .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
 
         guard segments.isEmpty == false else {
@@ -214,12 +251,13 @@ extension EMLParser {
     /// lists and code of a newsletter.
     ///
     /// A form that shows nothing gives way to the one before it, the plain
-    /// text of a newsletter that is all images.
-    func preferredAlternative(_ parts: [MIMEEntity]) -> String? {
+    /// text of a newsletter that is all images. A picture embedded from its
+    /// file is something to show.
+    func preferredAlternative(_ parts: [MIMEEntity], images: inout [InlineImage]) -> String? {
         let forms = parts.reversed()
         for form in forms {
             guard
-                let text = self.bodyText(of: form),
+                let text = self.bodyText(of: form, images: &images),
                 text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             else {
                 continue
@@ -251,11 +289,11 @@ extension EMLParser {
 
     /// The text a body part contributes: a container its own selection, a leaf
     /// its decoded content, converted to Markdown if it is HTML.
-    func bodyText(of part: MIMEEntity) -> String? {
+    func bodyText(of part: MIMEEntity, images: inout [InlineImage]) -> String? {
         guard parseContentType(part.headers["content-type"]).mediaType.hasPrefix("multipart/") else {
-            return self.renderedText(part)
+            return self.renderedText(part, images: &images)
         }
-        return self.plainText(headers: part.headers, rawBody: part.rawBody)
+        return self.plainText(headers: part.headers, rawBody: part.rawBody, images: &images)
     }
 
     /// Collects the filenames of attachment parts across the MIME tree.
@@ -287,8 +325,9 @@ extension EMLParser {
         }
 
         let entities = self.splitParts(rawBody, boundary: boundary).map { self.parseEntity($0) }
+        let bodyPositions = entities.indices.filter { self.isBodyPart(entities[$0]) }
         var found: [AttachmentPart] = []
-        for entity in entities {
+        for (position, entity) in entities.enumerated() {
             let entityType = parseContentType(entity.headers["content-type"])
 
             if entityType.mediaType.hasPrefix("multipart/") {
@@ -302,14 +341,20 @@ extension EMLParser {
                 continue
             }
 
+            // Apple Mail sets the text around an attachment placed in it into
+            // parts of their own, so a part with text on both sides of it in a
+            // `mixed` stands in the middle of the message.
+            let isBetweenText = contentType.mediaType == "multipart/mixed" && bodyPositions.contains { $0 < position } && bodyPositions.contains { $0 > position }
+
             let disposition = parseContentDisposition(entity.headers["content-disposition"])
-            let filename = disposition.filename ?? entityType.parameters["name"].map(decodeRFC2047Header)
+            let filename = self.filename(of: entity)
             guard
                 self.isUserAttachment(
                     disposition: disposition.type,
                     type: entityType,
                     filename: filename,
-                    headers: entity.headers
+                    headers: entity.headers,
+                    isBetweenText: isBetweenText
                 )
             else {
                 continue
@@ -332,20 +377,29 @@ extension EMLParser {
     ///
     /// Images stay out even when they are named. Inline images are body
     /// furniture, signature logos and tracking pixels, and `signature.png` has
-    /// a regression test saying so since v0.5.0. The cost is a known one: a
-    /// photo dragged into an Apple Mail body also arrives as a named inline
-    /// image and is still not listed.
+    /// a regression test saying so since v0.5.0.
     ///
-    /// `Content-ID` excludes on top of that, for the rarer mailer that embeds a
-    /// non-image part and references it from the HTML via `cid:`.
-    func isUserAttachment(disposition: String, type: ContentType, filename: String?, headers: [String: String]) -> Bool {
+    /// Except for a picture between two parts of the text (v1.3.0): Apple Mail
+    /// sends a picture placed in the middle of a message that way, a screenshot
+    /// or a photo, and nothing else does. The exception is the structure, not
+    /// the size of the picture: in an archive of 716 mails 6 pictures in 3 mails
+    /// stood so, all of them content, while the logo of a newsletter stands
+    /// after its only text part (measured 2026-10-03).
+    ///
+    /// `Content-ID` excludes on top of that, because a part the HTML pulls in
+    /// via `cid:` is a resource of the HTML: a picture shown in its place, or
+    /// the rarer non-image part a mailer embeds that way.
+    func isUserAttachment(disposition: String, type: ContentType, filename: String?, headers: [String: String], isBetweenText: Bool) -> Bool {
         if disposition == "attachment" {
             return true
         }
-        guard disposition == "inline", filename != nil else {
+        guard headers["content-id"] == nil else {
             return false
         }
-        guard headers["content-id"] == nil else {
+        if isBetweenText, type.mediaType.hasPrefix("image/") {
+            return true
+        }
+        guard disposition == "inline", filename != nil else {
             return false
         }
 
@@ -358,13 +412,17 @@ extension EMLParser {
         return self.attachmentParts(headers: self.parseHeaders(headerBlock), rawBody: rawBody)
     }
 
-    /// Decodes a leaf entity and, if it is `text/html`, converts it to Markdown.
-    func renderedText(_ entity: MIMEEntity) -> String {
+    /// Decodes a leaf entity and, if it is `text/html`, converts it to
+    /// Markdown, noting the pictures from the mail it shows.
+    func renderedText(_ entity: MIMEEntity, images: inout [InlineImage]) -> String {
         let decoded = self.decodeLeaf(entity)
-        if parseContentType(entity.headers["content-type"]).mediaType == "text/html" {
-            return HTMLToMarkdown.convert(decoded)
+        guard parseContentType(entity.headers["content-type"]).mediaType == "text/html" else {
+            return decoded
         }
-        return decoded
+
+        let converted = HTMLToMarkdown.convert(decoded, imageNames: self.imageNames)
+        images += converted.images
+        return converted.markdown
     }
 
     /// Decodes a leaf entity's body according to its transfer encoding and charset.
@@ -447,6 +505,96 @@ extension EMLParser {
     func parseEntity(_ raw: String) -> MIMEEntity {
         let (headerBlock, body) = self.splitHeadersAndBody(raw)
         return MIMEEntity(headers: self.parseHeaders(headerBlock), rawBody: body, source: self.source)
+    }
+
+    /// The name a part carries: its disposition's `filename`, else its content
+    /// type's `name`, RFC 2047-decoded.
+    func filename(of entity: MIMEEntity) -> String? {
+        let disposition = parseContentDisposition(entity.headers["content-disposition"])
+        return disposition.filename ?? parseContentType(entity.headers["content-type"]).parameters["name"].map(decodeRFC2047Header)
+    }
+}
+
+// MARK: - Pictures from parts of the mail
+extension EMLParser {
+
+    /// The pictures of `images` the mail carries a part for, each paired with
+    /// that part, each once, in the order the body shows them.
+    ///
+    /// A picture whose part is an attachment of its own is not among them: the
+    /// note lists it already, so it is not left out, and written as a file it
+    /// is that attachment's file, not a second one.
+    func inlineImageParts(of images: [InlineImage], from raw: String) -> [(image: InlineImage, part: AttachmentPart)] {
+        // Finding the parts reads the whole mail twice more, which costs a
+        // second for a mail of 18 MB (measured 2026-10-04), so it only happens
+        // where the body shows a picture.
+        guard images.isEmpty == false else {
+            return []
+        }
+
+        let attached = Set(self.attachmentParts(from: raw).compactMap { $0.contentID })
+        let parts = self.partsByContentID(from: raw)
+        var paired: Set<String> = []
+        var found: [(image: InlineImage, part: AttachmentPart)] = []
+
+        for image in images {
+            guard
+                attached.contains(image.contentID) == false,
+                let part = parts[image.contentID],
+                paired.insert(image.contentID).inserted
+            else {
+                continue
+            }
+
+            let pair = (image: image, part: part)
+            found.append(pair)
+        }
+
+        return found
+    }
+
+    /// Every part of a whole raw message that carries a `Content-ID`, by it.
+    func partsByContentID(from raw: String) -> [String: AttachmentPart] {
+        let (headerBlock, rawBody) = self.splitHeadersAndBody(raw)
+        return self.partsByContentID(headers: self.parseHeaders(headerBlock), rawBody: rawBody)
+    }
+
+    /// Every part in the MIME tree that carries a `Content-ID`, by it: the
+    /// parts an HTML body can show as pictures through `cid:`. Whatever their
+    /// type, since a mailer may send a picture as `application/octet-stream`
+    /// (a support system did, measured 2026-10-04). Where a mail gives two
+    /// parts the same one, the first wins.
+    func partsByContentID(headers: [String: String], rawBody: String) -> [String: AttachmentPart] {
+        let contentType = parseContentType(headers["content-type"])
+        guard
+            contentType.mediaType.hasPrefix("multipart/"),
+            let boundary = contentType.boundary
+        else {
+            return [:]
+        }
+
+        let entities = self.splitParts(rawBody, boundary: boundary).map { self.parseEntity($0) }
+        var found: [String: AttachmentPart] = [:]
+        for entity in entities {
+            let entityType = parseContentType(entity.headers["content-type"])
+
+            if entityType.mediaType.hasPrefix("multipart/") {
+                let nested = self.partsByContentID(headers: entity.headers, rawBody: entity.rawBody)
+                found.merge(nested) { first, _ in first }
+                continue
+            }
+
+            let part = AttachmentPart(filename: self.filename(of: entity), mediaType: entityType.mediaType, entity: entity)
+            guard
+                let contentID = part.contentID,
+                found[contentID] == nil
+            else {
+                continue
+            }
+            found[contentID] = part
+        }
+
+        return found
     }
 }
 

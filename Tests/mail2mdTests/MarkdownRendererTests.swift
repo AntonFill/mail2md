@@ -104,6 +104,7 @@ struct AttachmentBlockTests {
             messageID: nil,
             body: body,
             attachments: attachments,
+            inlineImages: [],
             invisibleCharacters: InvisibleCharacters.Report()
         )
     }
@@ -169,6 +170,17 @@ struct AttachmentBlockTests {
             """
 
         #expect(markdown.hasSuffix(expected))
+    }
+
+    /// A picture embedded where the mail showed it is a file of the note like
+    /// any other, so `attachments` lists it, but the closing block does not
+    /// show it a second time.
+    @Test func listsAnEmbeddedPictureWithoutRepeatingItInTheBlock() {
+        let embedded = mail2md.Attachment(name: "image001.png", mediaType: "image/png", isEmbedded: true)
+        let markdown = Self.linking.render(Self.message([embedded, Self.document("Doc.pdf")], body: "Hier:\n\n![[image001.png]]"))
+
+        #expect(markdown.contains("attachments:\n  - \"[[image001.png]]\"\n  - \"[[Doc.pdf]]\"\n---\n"))
+        #expect(markdown.hasSuffix("Hier:\n\n![[image001.png]]\n\n[[Doc.pdf]]\n"))
     }
 
     @Test func listsAttachmentsAsWikilinkBlockInTheFrontmatter() {

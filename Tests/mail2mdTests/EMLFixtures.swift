@@ -392,6 +392,150 @@ let splitBodyEML = """
     --b--\r
     """
 
+/// The Apple Mail shape of a plain-text mail with a picture placed in the
+/// middle of the text: a part of its own between the two halves, named and
+/// `inline`, without a `Content-ID`. The picture is a valid PNG of 3 × 2
+/// pixels. The parameters build the neighbours the rule has to tell apart: a
+/// picture with text on one side only, one a `Content-ID` makes a resource of
+/// the HTML, one in a container other than `mixed`.
+func splitImageMail(container: String = "multipart/mixed", contentID: String? = nil, textBefore: Bool = true, textAfter: Bool = true) -> String {
+    let before = textBefore ? "--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nGuten Tag, hier der Ausschnitt:\r\n" : ""
+    let after = textAfter ? "--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nFreundliche Grüsse\r\n" : ""
+    let identity = contentID.map { "Content-ID: \($0)\r\n" } ?? ""
+
+    return """
+        From: Anton Fillmann <anton@example.com>\r
+        To: Amt <amt@example.com>\r
+        Subject: Ausschnitt\r
+        Date: Mon, 07 Sep 2026 10:00:00 +0200\r
+        MIME-Version: 1.0\r
+        Content-Type: \(container); boundary="b"\r
+        \r
+        \(before)--b\r
+        Content-Type: image/png\r
+        Content-Disposition: inline; filename="PastedGraphic-1.png"\r
+        \(identity)Content-Transfer-Encoding: base64\r
+        \r
+        iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAAAAAC4HznGAAAAD0lEQVR4nGM4ceIEAxADABLIBLEaJ2FIAAAAAElFTkSuQmCC\r
+        \(after)--b--\r
+        """
+}
+
+let splitImageEML = splitImageMail()
+
+/// The Outlook shape of the mail that lost a screenshot without a word
+/// (2026-09-29): a `multipart/related` around the alternative, the HTML showing
+/// the screenshot in a paragraph of its own and a linked icon under the
+/// signature, both parts addressed by `cid:`. The plain form marks the
+/// screenshot as `[cid:…]`, but the HTML form is the one read. The screenshot
+/// is a valid PNG of 3 × 2 pixels the HTML shows at 474 × 464, the icon one of
+/// 1 × 1 whose size the HTML leaves open.
+let inlineImageEML = """
+    From: Jane Doe <jane@example.com>\r
+    To: Anton Fillmann <anton@example.com>\r
+    Subject: AW: Ausschnitt\r
+    Date: Mon, 07 Sep 2026 10:00:00 +0200\r
+    MIME-Version: 1.0\r
+    Content-Type: multipart/related; type="multipart/alternative"; boundary="rel"\r
+    \r
+    --rel\r
+    Content-Type: multipart/alternative; boundary="alt"\r
+    \r
+    --alt\r
+    Content-Type: text/plain; charset=utf-8\r
+    \r
+    Hallo Anton,\r
+    \r
+    hier der Ausschnitt aus dem Portal:\r
+    \r
+    [cid:image001.png@01DC1234.5678ABCD]\r
+    \r
+    Gruss\r
+    Jane\r
+    --alt\r
+    Content-Type: text/html; charset=utf-8\r
+    \r
+    <html><body><p class=MsoNormal>Hallo Anton,<o:p></o:p></p><p class=MsoNormal><o:p>&nbsp;</o:p></p>\r
+    <p class=MsoNormal>hier der Ausschnitt aus dem Portal:<o:p></o:p></p><p class=MsoNormal><o:p>&nbsp;</o:p></p>\r
+    <p class=MsoNormal><img width=474 height=464 style="width:4.9375in;height:4.8333in" id="Grafik_x0020_1" src="cid:image001.png@01DC1234.5678ABCD"><o:p></o:p></p>\r
+    <p class=MsoNormal><o:p>&nbsp;</o:p></p><p class=MsoNormal>Gruss<br>Jane<o:p></o:p></p>\r
+    <p class=MsoNormal><a href="https://www.example.com/jane"><img alt="LinkedIn" src="cid:image002.png@01DC1234.5678ABCD"></a><o:p></o:p></p></body></html>\r
+    --alt--\r
+    --rel\r
+    Content-Type: image/png; name="image001.png"\r
+    Content-Disposition: inline; filename="image001.png"\r
+    Content-ID: <image001.png@01DC1234.5678ABCD>\r
+    Content-Transfer-Encoding: base64\r
+    \r
+    iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAAAAAC4HznGAAAAD0lEQVR4nGM4ceIEAxADABLIBLEaJ2FIAAAAAElFTkSuQmCC\r
+    --rel\r
+    Content-Type: image/png; name="image002.png"\r
+    Content-Disposition: inline; filename="image002.png"\r
+    Content-ID: <image002.png@01DC1234.5678ABCD>\r
+    Content-Transfer-Encoding: base64\r
+    \r
+    iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGM4AQAAygDJmcpdfgAAAABJRU5ErkJggg==\r
+    --rel--\r
+    """
+
+/// The shape of a support system's reply: a picture sent as an attachment of
+/// type `application/octet-stream`, which the HTML shows in place through its
+/// `Content-ID` all the same. Listed as an attachment it is not left out, and
+/// embedded it must not be written twice.
+let referencedAttachmentEML = """
+    From: Support <support@example.com>\r
+    To: Anton Fillmann <anton@example.com>\r
+    Subject: Adressänderung\r
+    Date: Mon, 07 Sep 2026 10:00:00 +0200\r
+    MIME-Version: 1.0\r
+    Content-Type: multipart/mixed; boundary="b"\r
+    \r
+    --b\r
+    Content-Type: text/html; charset=utf-8\r
+    \r
+    <html><body><p>Ihre Adresse wurde geändert.</p><p><img src="cid:logo.png"></p></body></html>\r
+    --b\r
+    Content-Type: application/octet-stream; name=logo.png\r
+    Content-Disposition: attachment; filename=logo.png\r
+    Content-ID: <logo.png>\r
+    Content-Transfer-Encoding: base64\r
+    \r
+    iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGM4AQAAygDJmcpdfgAAAABJRU5ErkJggg==\r
+    --b--\r
+    """
+
+/// An alternative whose HTML form shows nothing but a picture, a scan, while
+/// the plain form says a sentence about it. The picture is a valid PNG of
+/// 4 × 4 pixels without a name.
+let pictureOnlyEML = """
+    From: Scanner <scanner@example.com>\r
+    To: Anton Fillmann <anton@example.com>\r
+    Subject: Scan\r
+    Date: Mon, 07 Sep 2026 10:00:00 +0200\r
+    MIME-Version: 1.0\r
+    Content-Type: multipart/alternative; boundary="alt"\r
+    \r
+    --alt\r
+    Content-Type: text/plain; charset=utf-8\r
+    \r
+    Siehe Bild.\r
+    --alt\r
+    Content-Type: multipart/related; boundary="rel"\r
+    \r
+    --rel\r
+    Content-Type: text/html; charset=utf-8\r
+    \r
+    <html><body><img src="cid:scan@example.com"></body></html>\r
+    --rel\r
+    Content-Type: image/png\r
+    Content-ID: <scan@example.com>\r
+    Content-Transfer-Encoding: base64\r
+    \r
+    iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAAAAACMmsGiAAAADklEQVR4nGM4AQQMqAQAfRQMgauI/xAAAAAASUVORK5CYII=\r
+    --rel--\r
+    --alt--\r
+    """
+
 /// A mail that is nothing but an attachment, as a scanner sends it. Before
 /// v1.2.0 the raw MIME part, base64 and all, became the body.
 let attachmentOnlyEML = """

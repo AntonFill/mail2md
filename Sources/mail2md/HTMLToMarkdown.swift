@@ -13,10 +13,15 @@ import SwiftSoup
 /// It lays the body out the way a browser would, as far as Markdown can
 /// follow: a `div` is a line, a `p` a paragraph, and the element's own style
 /// decides where a browser leaves space. Lists, quotes, tables, rules and code
-/// always stand apart. Hidden elements are dropped, images too unless they
-/// show an emoji, and so are `script`, `style` and the like. A table holding
-/// data becomes a Markdown table, one used for layout is taken apart into its
-/// rows, whose cells share a line where a browser shows them side by side.
+/// always stand apart. Hidden elements are dropped, and so are `script`,
+/// `style` and the like. A table holding data becomes a Markdown table, one
+/// used for layout is taken apart into its rows, whose cells share a line
+/// where a browser shows them side by side.
+///
+/// Pictures are dropped, except a picture of an emoji, written as the emoji,
+/// and a picture from a part of the mail whose file the caller names, which
+/// is embedded in its place. Each picture from the mail that a reader would
+/// see is handed back, so the run can name what the note leaves out.
 ///
 /// The goal is readable, AI-ready Markdown, not a rendering: no fonts, no
 /// colours, no stylesheet. The one rule taken from outside the element is a
@@ -25,8 +30,18 @@ import SwiftSoup
 enum HTMLToMarkdown {
 
     static func convert(_ html: String) -> String {
+        return self.convert(html, imageNames: [:]).markdown
+    }
+
+    /// The Markdown, and the pictures from parts of the mail it shows, in
+    /// document order.
+    ///
+    /// `imageNames` holds the file each picture was written to, by the
+    /// `Content-ID` its `cid:` address names. Such a picture is embedded where
+    /// the `img` stood; every other one is left out, as it always was.
+    static func convert(_ html: String, imageNames: [String: String]) -> (markdown: String, images: [InlineImage]) {
         guard let body = try? SwiftSoup.parse(self.joiningSurrogateHalves(html)).body() else {
-            return html
+            return (html, [])
         }
 
         // Drop non-content nodes before walking the tree. If the selector fails,
@@ -37,14 +52,173 @@ enum HTMLToMarkdown {
             _ = try body
                 .select("script, style, head, title, meta, link, noscript, svg")
                 .remove()
+            try self.markFiles(in: body, imageNames: imageNames)
         }
         catch {
-            return html
+            return (html, [])
         }
 
         var layout = Layout()
         self.renderChildren(of: body, into: &layout)
-        return layout.markdown
+        return (layout.markdown, self.shownImages(in: body))
+    }
+}
+
+// MARK: - Pictures from the mail
+extension HTMLToMarkdown {
+
+    /// The attributes the walk passes pictures by. Before it, a picture whose
+    /// file the caller named carries that name; during it, every picture from
+    /// the mail the walk reaches is marked as shown, so that afterwards the
+    /// tree itself says which ones a reader sees: not a hidden one, not one
+    /// inside code. The walk is a tree of static calls, and the pictures are
+    /// the one thing it hands back besides the text.
+    fileprivate static let fileAttribute = "data-mail2md-file"
+    fileprivate static let shownAttribute = "data-mail2md-shown"
+
+    /// Clears the marks the mail's own HTML may bring along, so it cannot steer
+    /// the walk, and names the file of every picture the caller wrote one for.
+    fileprivate static func markFiles(in body: Element, imageNames: [String: String]) throws {
+        let marked = try body.select("[\(self.fileAttribute)], [\(self.shownAttribute)]")
+        for element in marked {
+            try element.removeAttr(self.fileAttribute)
+            try element.removeAttr(self.shownAttribute)
+        }
+
+        let pictures = try body.select("img")
+        for picture in pictures {
+            guard
+                let contentID = self.contentID(of: picture),
+                let file = imageNames[contentID]
+            else {
+                continue
+            }
+            try picture.attr(self.fileAttribute, file)
+        }
+    }
+
+    /// The `Content-ID` a picture is addressed by, or nil for a picture from
+    /// anywhere else. RFC 2392 writes it after `cid:`, its special characters
+    /// percent-encoded.
+    fileprivate static func contentID(of picture: Element) -> String? {
+        let source = ((try? picture.attr("src")) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard source.lowercased().hasPrefix("cid:") else {
+            return nil
+        }
+
+        let address = String(source.dropFirst(4))
+        let contentID = address.removingPercentEncoding ?? address
+        return contentID.isEmpty ? nil : contentID
+    }
+
+    /// The file a picture is embedded from, where the caller wrote one for it.
+    fileprivate static func file(of picture: Element) -> String? {
+        guard
+            let file = try? picture.attr(self.fileAttribute),
+            file.isEmpty == false
+        else {
+            return nil
+        }
+        return file
+    }
+
+    /// The pictures from the mail the walk reached, in document order, with
+    /// the size the HTML gives each.
+    fileprivate static func shownImages(in body: Element) -> [InlineImage] {
+        guard let pictures = try? body.select("img[\(self.shownAttribute)]") else {
+            return []
+        }
+
+        return pictures.array().compactMap { picture in
+            guard let contentID = self.contentID(of: picture) else {
+                return nil
+            }
+            return InlineImage(
+                contentID: contentID,
+                width: self.declaredLength("width", of: picture),
+                height: self.declaredLength("height", of: picture)
+            )
+        }
+    }
+
+    /// A side of a picture as the HTML gives it, in CSS pixels. The inline
+    /// style wins over the attribute, as in a browser, also where it says
+    /// something only the page around it can resolve.
+    fileprivate static func declaredLength(_ side: String, of picture: Element) -> Int? {
+        if let value = self.declarations(of: picture)[side] {
+            return self.pixels(value)
+        }
+        return self.pixels((try? picture.attr(side)) ?? "")
+    }
+
+    /// A CSS length in pixels, or nil for nothing readable and for one that
+    /// depends on the page around it, a percentage or `auto`, both of which
+    /// `points` reads as nothing.
+    fileprivate static func pixels(_ value: String) -> Int? {
+        guard
+            let points = self.points(value),
+            points > 0
+        else {
+            return nil
+        }
+        return Int((points / 0.75).rounded())
+    }
+
+    /// A picture embedded from its file, its alt text as the alias where that
+    /// says something about the picture (Anton's decision 1a, 2026-10-03).
+    fileprivate static func embed(_ file: String, alt: String) -> String {
+        guard let alias = self.alias(for: alt) else {
+            return "![[\(file)]]"
+        }
+        return "![[\(file)|\(alias)]]"
+    }
+
+    /// The alt text on one line, or nil where it says nothing about the
+    /// picture: empty, a file name, or Office's own description, which it
+    /// writes in when the sender wrote none (its closing line in German or in
+    /// English, measured in the archive and named by Microsoft's help on alt
+    /// text). A number would set the picture's size in Obsidian, and a
+    /// bracket or a pipe would break the embed.
+    fileprivate static func alias(for alt: String) -> String? {
+        let text = self.collapseWhitespace(alt).trimmingSpaces
+        let lowercased = text.lowercased()
+        let pictureExtensions = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".heic", ".svg"]
+        let officeDescriptions = [
+            "automatisch generierte beschreibung",
+            "ki-generierte inhalte können fehlerhaft sein",
+            "description automatically generated",
+            "description generated with",
+            "ai-generated content may be incorrect",
+        ]
+
+        guard
+            text.isEmpty == false,
+            pictureExtensions.contains(where: { lowercased.hasSuffix($0) }) == false,
+            officeDescriptions.contains(where: { lowercased.contains($0) }) == false,
+            text.wholeMatch(of: /[0-9]+(x[0-9]+)?/) == nil,
+            text.contains(where: { "[]|".contains($0) }) == false
+        else {
+            return nil
+        }
+        return text
+    }
+
+    /// Whether a picture embedded from its file shows inside the element: one
+    /// a browser does not hide, and no picture of an emoji, which stays text.
+    fileprivate static func holdsEmbed(_ element: Element) -> Bool {
+        return element.children().array().contains { child in
+            guard self.isHidden(child) == false else {
+                return false
+            }
+            let isEmbed = child.tagName() == "img" && self.file(of: child) != nil && self.isEmoji(child) == false
+            return isEmbed || self.holdsEmbed(child)
+        }
+    }
+
+    /// Whether a picture's alt text is nothing but emoji.
+    fileprivate static func isEmoji(_ picture: Element) -> Bool {
+        let alt = ((try? picture.attr("alt")) ?? "").trimmingCharacters(in: .whitespaces)
+        return InvisibleCharacters.isEmoji(alt)
     }
 }
 
@@ -294,10 +468,15 @@ extension HTMLToMarkdown {
 // MARK: - Inline elements
 extension HTMLToMarkdown {
 
+    /// Emphasis around each line of text. A picture looks the same with it or
+    /// without, so a line of nothing but pictures gets no markers.
     fileprivate static func emphasis(_ element: Element, marker: String, into layout: inout Layout) {
         let content = self.content(of: element)
 
         layout.place(content) { line in
+            guard self.holdsText(line) else {
+                return line
+            }
             return marker + line + marker
         }
     }
@@ -310,8 +489,16 @@ extension HTMLToMarkdown {
     /// A link around links, a job card or the preview of a repository, is
     /// taken apart, and its inner links keep their targets: Markdown cannot
     /// nest links, and the `[[` it wrote opens a wikilink in Obsidian.
+    ///
+    /// So is a link around a picture embedded from its file: Obsidian does not
+    /// show an embed inside a link. The picture stays and the target goes, as
+    /// it went with the picture before; in the archive 135 of 136 links around
+    /// a picture held nothing else, a logo or an icon (measured 2026-10-04).
     fileprivate static func link(_ element: Element, into layout: inout Layout) {
-        guard self.holdsLink(element) == false else {
+        guard
+            self.holdsLink(element) == false,
+            self.holdsEmbed(element) == false
+        else {
             self.renderChildren(of: element, into: &layout)
             return
         }
@@ -336,15 +523,29 @@ extension HTMLToMarkdown {
         }
     }
 
-    /// A picture is dropped, unless its alt text is nothing but emoji: Outlook
-    /// sends an emoji typed into a message as a picture of it, and the emoji
-    /// is what the reader saw.
+    /// A picture of an emoji is written as the emoji: Outlook sends an emoji
+    /// typed into a message as a picture of it, and the emoji is what the
+    /// reader saw.
+    ///
+    /// A picture from a part of the mail is marked as shown, and it is
+    /// embedded where its file was named; written into the text as it is,
+    /// because a name with two spaces in a row is still that file's name. Any
+    /// other picture is dropped.
     fileprivate static func image(_ element: Element, into layout: inout Layout) {
-        let alt = ((try? element.attr("alt")) ?? "").trimmingCharacters(in: .whitespaces)
-        guard InvisibleCharacters.isEmoji(alt) else {
+        guard self.isEmoji(element) == false else {
+            let alt = ((try? element.attr("alt")) ?? "").trimmingCharacters(in: .whitespaces)
+            self.write(alt, into: &layout)
             return
         }
-        self.write(alt, into: &layout)
+        guard self.contentID(of: element) != nil else {
+            return
+        }
+        _ = try? element.attr(self.shownAttribute, "")
+
+        if let file = self.file(of: element) {
+            let alt = (try? element.attr("alt")) ?? ""
+            layout.write(self.embed(file, alt: alt))
+        }
     }
 
     fileprivate static func inlineCode(_ element: Element, into layout: inout Layout) {
@@ -368,6 +569,11 @@ extension HTMLToMarkdown {
 
         var isEmpty: Bool {
             return self.lines.isEmpty
+        }
+
+        /// Whether it holds text beside the pictures embedded in it.
+        var holdsText: Bool {
+            return self.lines.contains { HTMLToMarkdown.holdsText($0) }
         }
 
         /// The cell's text for one row of a Markdown table: the pipe escaped,
@@ -437,6 +643,12 @@ extension HTMLToMarkdown {
     /// Readability: a bar of links, or a whole letter beside its menu, which a
     /// Markdown table squeezed into one cell (counted on 2026-10-03: 53 tables
     /// in the archive, and 35 more with a caption above their one row).
+    ///
+    /// Both tests look at the text alone, as if the table's pictures were not
+    /// there. An embedded picture fills its cell, and a logo beside a signature
+    /// would then make a table of data out of what was layout without it (one
+    /// signature in the archive, 2026-10-04). Embedding pictures changes no
+    /// layout.
     fileprivate static func dataRows(of table: Element) -> [[Cell]]? {
         let role = ((try? table.attr("role")) ?? "").lowercased()
         guard
@@ -465,9 +677,11 @@ extension HTMLToMarkdown {
             }
         }
 
-        let rowsOfCells = rows.filter { self.isSpanning($0) == false }
-        let holdsData = rowsOfCells.count >= 2 && rowsOfCells.contains { row in
-            return row.filter { $0.isEmpty == false }.count >= 2
+        let rowsOfText = rows.filter { row in
+            return row.contains { $0.holdsText } && self.isSpanning(row) == false
+        }
+        let holdsData = rowsOfText.count >= 2 && rowsOfText.contains { row in
+            return row.filter { $0.holdsText }.count >= 2
         }
         return holdsData ? rows : nil
     }
@@ -1013,12 +1227,24 @@ extension HTMLToMarkdown {
         return address
     }
 
-    /// Bold, unless the text already is.
+    /// Bold, unless the text already is, or holds nothing but pictures, which
+    /// look the same either way.
     fileprivate static func bold(_ text: String) -> String {
-        guard text.hasPrefix("**") == false || text.hasSuffix("**") == false else {
+        guard
+            text.hasPrefix("**") == false || text.hasSuffix("**") == false,
+            self.holdsText(text)
+        else {
             return text
         }
         return "**" + text + "**"
+    }
+
+    /// Whether a line holds text beside the pictures embedded in it.
+    fileprivate static func holdsText(_ line: String) -> Bool {
+        guard line.contains("![[") else {
+            return line.contains { $0 != " " }
+        }
+        return line.replacing(/!\[\[[^\]]*\]\]/, with: "").contains { $0 != " " }
     }
 }
 

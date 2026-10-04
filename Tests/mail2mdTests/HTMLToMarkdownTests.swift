@@ -567,6 +567,211 @@ struct TableTests {
 
 // MARK: -
 
+/// Pictures from a part of the mail, addressed by `cid:`. Each one shown is
+/// noted with the size the HTML gives it, so the run can name what the note
+/// leaves out, and given the file it was written to, it is embedded in its
+/// place. A picture from the web is neither.
+struct PictureTests {
+
+    static let screenshot = "<img width=\"474\" height=\"464\" style=\"width:4.9375in;height:4.8333in\" src=\"cid:image001.png@01DC1234\">"
+
+    @Test func notesAPictureFromTheMailAndLeavesItOut() {
+        let converted = HTMLToMarkdown.convert("<p>Hier der Ausschnitt:</p><p>\(Self.screenshot)</p>", imageNames: [:])
+
+        #expect(converted.markdown == "Hier der Ausschnitt:")
+        #expect(converted.images == [InlineImage(contentID: "image001.png@01DC1234", width: 474, height: 464)])
+    }
+
+    /// A browser lets the inline style win over the attributes, and leaves a
+    /// side open that is a share of the page or `auto`.
+    @Test(arguments: [
+        ("width=\"474\" height=\"464\"", 474, 464),
+        ("width=\"600\" height=\"400\" style=\"width:4.9375in;height:4.8333in\"", 474, 464),
+        ("style=\"width:120px\" height=\"30\"", 120, 30),
+        ("width=\"100%\" height=\"40\" style=\"height:auto\"", nil, nil),
+        ("", nil, nil),
+    ] as [(String, Int?, Int?)])
+    func notesTheSizeTheHTMLGivesAPicture(attributes: String, width: Int?, height: Int?) {
+        let converted = HTMLToMarkdown.convert("<img \(attributes) src=\"cid:logo@example.com\">", imageNames: [:])
+
+        #expect(converted.images == [InlineImage(contentID: "logo@example.com", width: width, height: height)])
+    }
+
+    /// Only a picture the mail carries is its own: one from the web is no part
+    /// of it, a hidden one is not shown, and a picture of an emoji is written
+    /// as the emoji, also when its file is there.
+    @Test(arguments: [
+        "<img src=\"https://example.com/logo.png\">",
+        "<div style=\"display:none\"><img src=\"cid:pixel@example.com\"></div>",
+        "<p>Bis bald <img alt=\"😉\" src=\"cid:image002.png@01D9\"></p>",
+    ])
+    func notesNoOtherPicture(html: String) {
+        let converted = HTMLToMarkdown.convert(html, imageNames: ["pixel@example.com": "pixel.png", "image002.png@01D9": "image002.png"])
+
+        #expect(converted.images.isEmpty)
+        #expect(converted.markdown.contains("![[") == false)
+    }
+
+    /// Given the file a picture was written to, it is embedded where the `img`
+    /// stood, in Outlook's paragraphs on a line of its own.
+    @Test func embedsAPictureWhereItStood() {
+        let html = """
+            <p class=MsoNormal>Hier der Ausschnitt:<o:p></o:p></p><p class=MsoNormal><o:p>&nbsp;</o:p></p>\
+            <p class=MsoNormal>\(Self.screenshot)<o:p></o:p></p><p class=MsoNormal><o:p>&nbsp;</o:p></p><p class=MsoNormal>Gruss<o:p></o:p></p>
+            """
+        let converted = HTMLToMarkdown.convert(html, imageNames: ["image001.png@01DC1234": "2026.09.07 10.00 ENCL image001.png"])
+
+        #expect(converted.markdown == "Hier der Ausschnitt:\n\n![[2026.09.07 10.00 ENCL image001.png]]\n\nGruss")
+        #expect(converted.images.map { $0.contentID } == ["image001.png@01DC1234"])
+    }
+
+    /// The alt text becomes the embed's alias where it says something about
+    /// the picture (Anton's decision 1a, 2026-10-03), on one line: Outlook sent
+    /// a text box as a picture, its text in the alt.
+    @Test func aliasesAnEmbedWithAnAltTextThatSaysSomething() {
+        let html = "<img alt=\"Terminsache!\nBitte bis Freitag einreichen.\" src=\"cid:image008.png@01D2\">"
+        let converted = HTMLToMarkdown.convert(html, imageNames: ["image008.png@01D2": "image008.png"])
+
+        #expect(converted.markdown == "![[image008.png|Terminsache! Bitte bis Freitag einreichen.]]")
+    }
+
+    /// An alt text says nothing when it is empty or a file name, and nothing of
+    /// the sender's when Office described the picture itself, in German or in
+    /// English, old or new. A number would set the picture's size in Obsidian,
+    /// and a bracket or a pipe would break the embed.
+    @Test(arguments: [
+        "",
+        "PastedGraphic-1.png",
+        "Ein Bild, das Text, Screenshot enthält.\n\nAutomatisch generierte Beschreibung",
+        "Ein Bild, das Kleidung, Person, Lächeln enthält.\n\nKI-generierte Inhalte können fehlerhaft sein.",
+        "A screenshot of a computer\n\nDescription automatically generated",
+        "A close-up of a logo\n\nAI-generated content may be incorrect.",
+        "A person standing in front of a building\n\nDescription generated with high confidence",
+        "120",
+        "120x40",
+        "Logo [klein]",
+        "Firma | Slogan",
+    ])
+    func embedsWithoutAnAliasAnAltTextThatSaysNothing(alt: String) {
+        let converted = HTMLToMarkdown.convert("<img alt=\"\(alt)\" src=\"cid:logo@example.com\">", imageNames: ["logo@example.com": "logo.png"])
+
+        #expect(converted.markdown == "![[logo.png]]")
+    }
+
+    /// A link around a picture is taken apart and the picture stays: Obsidian
+    /// does not show an embed inside a link, and in an archive of 716 mails
+    /// 135 of 136 such links held nothing but a logo or an icon.
+    @Test func takesALinkAroundAnEmbeddedPictureApart() {
+        let html = "<p>Gruss<br>Jane<br><a href=\"https://www.example.com/jane\"><img alt=\"LinkedIn\" src=\"cid:image002.png@01DC\"></a></p>"
+        let converted = HTMLToMarkdown.convert(html, imageNames: ["image002.png@01DC": "image002.png"])
+
+        #expect(converted.markdown == "Gruss\nJane\n![[image002.png|LinkedIn]]")
+    }
+
+    /// Without its file the picture is left out, and the link around it with
+    /// it, since nothing in it shows: the note it was before.
+    @Test func leavesALinkAroundAPictureWithoutItsFileAsItWas() {
+        let html = "<p>Gruss<br>Jane <a href=\"https://www.example.com/jane\"><img alt=\"LinkedIn\" src=\"cid:image002.png@01DC\"></a></p>"
+        let converted = HTMLToMarkdown.convert(html, imageNames: [:])
+
+        #expect(converted.markdown == "Gruss\nJane")
+        #expect(converted.images.map { $0.contentID } == ["image002.png@01DC"])
+    }
+
+    /// RFC 2392 writes the `Content-ID` after `cid:` with its special
+    /// characters percent-encoded.
+    @Test func readsAPercentEncodedAddress() {
+        let converted = HTMLToMarkdown.convert("<img src=\"cid:image001.png%4001DC\">", imageNames: ["image001.png@01DC": "image001.png"])
+
+        #expect(converted.markdown == "![[image001.png]]")
+        #expect(converted.images.map { $0.contentID } == ["image001.png@01DC"])
+    }
+
+    /// The converter marks pictures with attributes of its own while it walks
+    /// the HTML. A mail that brings them along does not steer it: not to a
+    /// file of its choosing, and not to a picture it hides.
+    @Test func ignoresTheMarksAMailBringsAlong() {
+        let html = """
+            <img data-mail2md-file="../geheim.png" src="cid:logo@example.com">\
+            <div style="display:none"><img data-mail2md-shown src="cid:pixel@example.com"></div>
+            """
+        let converted = HTMLToMarkdown.convert(html, imageNames: [:])
+
+        #expect(converted.markdown.isEmpty)
+        #expect(converted.images == [InlineImage(contentID: "logo@example.com", width: nil, height: nil)])
+    }
+
+    /// Only a picture that shows takes a link apart: one the browser hides,
+    /// and a picture of an emoji, which stays text, leave it whole.
+    @Test(arguments: [
+        ("<a href=\"https://example.com/jane\">Jane<img style=\"display:none\" src=\"cid:logo@example.com\"></a>", "[Jane](https://example.com/jane)"),
+        ("<a href=\"https://example.com/jane\"><img alt=\"😉\" src=\"cid:logo@example.com\"></a>", "[😉](https://example.com/jane)"),
+    ])
+    func keepsALinkWhosePictureDoesNotShow(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html, imageNames: ["logo@example.com": "logo.png"]).markdown == expected)
+    }
+
+    /// A row of pictures alone is no row of text, so it cannot make a table of
+    /// data out of a single row of it either.
+    @Test func countsNoRowOfPicturesAloneTowardsData() {
+        let html = "<table><tr><td>Jane Doe</td><td>Geschäftsleitung</td></tr><tr><td><img src=\"cid:a@example.com\"></td><td><img src=\"cid:b@example.com\"></td></tr></table>"
+        let converted = HTMLToMarkdown.convert(html, imageNames: ["a@example.com": "a.png", "b@example.com": "b.png"])
+
+        #expect(converted.markdown == "Jane Doe Geschäftsleitung\n![[a.png]] ![[b.png]]")
+    }
+
+    /// Whether a table holds data is decided as if its pictures were not
+    /// there, so embedding them turns no layout into a table: the logo and the
+    /// icon beside a signature leave it lines, with the pictures in them.
+    @Test func keepsASignatureWithItsLogosForLayout() {
+        let html = """
+            <table><tr><td><img alt="Firmenlogo" src="cid:logo@example.com"></td><td>Jane Doe<br>Geschäftsleitung</td></tr>\
+            <tr><td><img src="cid:icon@example.com"></td><td>www.example.com</td></tr></table>
+            """
+        let names = ["logo@example.com": "logo.png", "icon@example.com": "icon.png"]
+
+        #expect(HTMLToMarkdown.convert(html, imageNames: names).markdown == "![[logo.png|Firmenlogo]] Jane Doe\nGeschäftsleitung\n![[icon.png]] www.example.com")
+        #expect(HTMLToMarkdown.convert(html, imageNames: [:]).markdown == "Jane Doe\nGeschäftsleitung\nwww.example.com")
+    }
+
+    /// A table that holds data without its pictures holds them as well, in the
+    /// cells they stand in.
+    @Test func keepsThePicturesOfATableOfData() {
+        let html = """
+            <table><tr><th>Bild</th><th>Artikel</th><th>Preis</th></tr>\
+            <tr><td><img src="cid:stuhl@example.com"></td><td>Stuhl</td><td>120</td></tr>\
+            <tr><td><img src="cid:tisch@example.com"></td><td>Tisch</td><td>300</td></tr></table>
+            """
+        let converted = HTMLToMarkdown.convert(html, imageNames: ["stuhl@example.com": "stuhl.png", "tisch@example.com": "tisch.png"])
+
+        #expect(converted.markdown == "| Bild | Artikel | Preis |\n|---|---|---|\n| ![[stuhl.png]] | Stuhl | 120 |\n| ![[tisch.png]] | Tisch | 300 |")
+    }
+
+    /// A picture looks the same with emphasis or without, so a line holding
+    /// nothing but pictures gets no markers, in bold, in italics and in a
+    /// header cell, while a line of text beside it keeps them.
+    @Test(arguments: [
+        ("<p><b><img alt=\"Signatur\" src=\"cid:logo@example.com\"></b></p>", "![[logo.png|Signatur]]"),
+        ("<p><i><img src=\"cid:logo@example.com\"></i></p>", "![[logo.png]]"),
+        ("<p><b>Jane Doe<br><img src=\"cid:logo@example.com\"></b></p>", "**Jane Doe**\n![[logo.png]]"),
+        ("<table><tr><th><img src=\"cid:logo@example.com\"></th><td>Jane Doe</td></tr></table>", "![[logo.png]] Jane Doe"),
+    ])
+    func setsNoEmphasisAroundPicturesAlone(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html, imageNames: ["logo@example.com": "logo.png"]).markdown == expected)
+    }
+
+    /// In a table of data the pipe before the alias is escaped, which is how
+    /// Obsidian writes a link with an alias inside a table.
+    @Test func escapesTheAliasPipeOfAnEmbedInATable() {
+        let html = "<table><tr><td>Logo</td><td><img alt=\"Firmenlogo\" src=\"cid:logo@example.com\"></td></tr><tr><td>Name</td><td>Muster AG</td></tr></table>"
+        let converted = HTMLToMarkdown.convert(html, imageNames: ["logo@example.com": "logo.png"])
+
+        #expect(converted.markdown == "|  |  |\n|---|---|\n| Logo | ![[logo.png\\|Firmenlogo]] |\n| Name | Muster AG |")
+    }
+}
+
+// MARK: -
+
 /// One constructed snippet per sender stack, each in the shape the stack
 /// really sends and with the whole expected note. Under Q1's option B every
 /// one of them runs through the emitter, not only the newsletters.

@@ -139,13 +139,17 @@ extension MarkdownRenderer {
     /// text without announcing them, and the frontmatter has already named them.
     /// No connecting prose either, since the links carry their own labels and
     /// the body takes no commentary.
+    ///
+    /// A picture the body embeds where the mail placed it is not shown here a
+    /// second time.
     func attachmentBlock(_ attachments: [Attachment]) -> [String] {
-        guard self.linksAttachments, attachments.isEmpty == false else {
+        let enclosed = attachments.filter { $0.isEmbedded == false }
+        guard self.linksAttachments, enclosed.isEmpty == false else {
             return []
         }
 
-        let images = attachments.filter { $0.isImage }
-        let documents = attachments.filter { $0.isImage == false }
+        let images = enclosed.filter { $0.isImage }
+        let documents = enclosed.filter { $0.isImage == false }
         var lines: [String] = []
 
         if images.isEmpty == false {

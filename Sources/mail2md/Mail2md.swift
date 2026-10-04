@@ -12,7 +12,7 @@ import Foundation
 struct Mail2md: ParsableCommand {
     static let appname = "mail2md"
     static let abstract = "Convert .eml files to Markdown with YAML frontmatter."
-    static let version = "1.2.1"
+    static let version = "1.3.0"
 
     static let configuration = CommandConfiguration(
         commandName: Self.appname,
@@ -38,6 +38,9 @@ struct Mail2md: ParsableCommand {
     @Option(name: .long, help: "Rename extracted attachments after a pattern, e.g. \"{date} {time} ENCL {name}\"; placeholders are {name}, {ext}, {date} and {time}, the latter two with an optional format ({date:yyyy.MM.dd}). Implies --extract-attachments.")
     var attachmentName: String?
 
+    @Flag(name: .long, help: "Write the pictures the mail shows from its own parts (cid:) as files too, and embed each where it stands. Implies --extract-attachments.")
+    var inlineImages = false
+
     @Argument(help: "Path to an .eml file.")
     var path: String
 
@@ -49,7 +52,14 @@ struct Mail2md: ParsableCommand {
     private struct Extraction {
         let parts: [AttachmentPart]
         let extractor: AttachmentExtractor
-        let names: [String]
+
+        /// What the note lists, in the order of `parts`, under the names the
+        /// files will carry.
+        let attachments: [Attachment]
+
+        /// The file each picture the body shows is embedded from, by the
+        /// `Content-ID` of its part.
+        let imageNames: [String: String]
     }
 
     mutating func run() throws {
@@ -68,14 +78,25 @@ struct Mail2md: ParsableCommand {
         }
 
         let (parser, raw) = try self.read(inputURL)
-        let message = parser.parse(raw)
+        let reading = parser.parse(raw)
         let outputPath = self.output ?? inputURL.deletingPathExtension().appendingPathExtension("md").path
 
         // An empty `created` is silent data loss in the vault: warn unconditionally
         // rather than only under --verbose.
-        if message.date == nil {
+        if reading.date == nil {
             printIf(true, "mail2md: \(self.path): missing or unparsable Date header (created left empty)")
         }
+
+        // Extraction is only planned here. The note is written first, so a
+        // conflict aborts before any attachment file exists, but it already
+        // links the attachments by the names the plan gives them. A picture
+        // the body shows is embedded under the name of its file, and the first
+        // reading is what says which pictures it shows, so the body is read
+        // once more with those names.
+        let extraction = try self.planExtraction(from: raw, parser: parser, message: reading, outputPath: outputPath)
+        let imageNames = extraction?.imageNames ?? [:]
+        let message = imageNames.isEmpty ? reading : EMLParser(source: parser.source, imageNames: imageNames).parse(raw)
+        let noted = extraction.map { message.replacingAttachments(with: $0.attachments) } ?? message
 
         // Removing characters changes what the note says, and what was kept may
         // still hide something, so both are reported without being asked.
@@ -83,11 +104,12 @@ struct Mail2md: ParsableCommand {
             printIf(true, "mail2md: \(self.path): \(message.invisibleCharacters.summary)")
         }
 
-        // Extraction is only planned here. The note is written first, so a
-        // conflict aborts before any attachment file exists, but it already
-        // links the attachments by the names the plan gives them.
-        let extraction = try self.planExtraction(from: raw, parser: parser, date: message.date, outputPath: outputPath)
-        let noted = extraction.map { message.replacingAttachments(withNames: $0.names) } ?? message
+        // A picture left out of the note may be its point, a screenshot, and
+        // only a reader can tell it from a logo, so each one is named.
+        let omissions = self.inlineImages ? [] : self.omissions(of: message, raw: raw, parser: parser)
+        if omissions.isEmpty == false {
+            printIf(true, "mail2md: \(self.path): \(InlineImage.summary(omissions)) (use --inline-images to include them)")
+        }
 
         // One .eml converts to exactly one Markdown file. A quoted reply chain
         // stays in that single file (as the mail itself keeps it); the semantic
@@ -146,20 +168,54 @@ struct Mail2md: ParsableCommand {
 
     /// Plans the attachment extraction, or nil when none was asked for.
     ///
-    /// The three attachment options all ask for extraction: naming or a target
-    /// directory is meaningless without it. Throws when the pattern names a
-    /// placeholder that does not exist, since that would otherwise end up
-    /// verbatim in a filename.
-    private func planExtraction(from raw: String, parser: EMLParser, date: Date?, outputPath: String) throws -> Extraction? {
-        guard self.extractAttachments || self.attachmentsDir != nil || self.attachmentName != nil else {
+    /// The three attachment options and `--inline-images` all ask for
+    /// extraction: naming or a target directory is meaningless without it, and
+    /// so is a picture embedded from a file nobody wrote. Throws when the
+    /// pattern names a placeholder that does not exist, since that would
+    /// otherwise end up verbatim in a filename.
+    ///
+    /// The pictures are planned after the attachments, so where two files
+    /// would collide, an attachment keeps the name it has without them. A
+    /// picture whose part is an attachment of its own is planned once, as that
+    /// attachment, and embedded all the same.
+    private func planExtraction(from raw: String, parser: EMLParser, message: EmailMessage, outputPath: String) throws -> Extraction? {
+        guard self.extractAttachments || self.attachmentsDir != nil || self.attachmentName != nil || self.inlineImages else {
             return nil
         }
 
-        let parts = parser.attachmentParts(from: raw)
+        let shown = self.inlineImages ? Set(message.inlineImages.map { $0.contentID }) : []
+        let pictureParts = self.inlineImages ? parser.inlineImageParts(of: message.inlineImages, from: raw).map { $0.part } : []
+        let parts = parser.attachmentParts(from: raw) + pictureParts
         let directory = self.attachmentsDir.map { URL(fileURLWithPath: $0) } ?? URL(fileURLWithPath: outputPath).deletingLastPathComponent()
-        let extractor = AttachmentExtractor(directory: directory, naming: try self.naming(for: date))
+        let extractor = AttachmentExtractor(directory: directory, naming: try self.naming(for: message.date))
+        let names = extractor.plannedNames(parts)
 
-        return Extraction(parts: parts, extractor: extractor, names: extractor.plannedNames(parts))
+        var attachments: [Attachment] = []
+        var imageNames: [String: String] = [:]
+        for (part, name) in zip(parts, names) {
+            let isEmbedded = part.contentID.map { shown.contains($0) } ?? false
+            let attachment = Attachment(name: name, mediaType: part.mediaType, sourceName: part.filename ?? "unnamed", isEmbedded: isEmbedded)
+            attachments.append(attachment)
+
+            if isEmbedded, let contentID = part.contentID {
+                imageNames[contentID] = name
+            }
+        }
+
+        return Extraction(parts: parts, extractor: extractor, attachments: attachments, imageNames: imageNames)
+    }
+
+    /// The pictures from parts of the mail that the body shows and the note
+    /// leaves out, each with the size a browser shows it at.
+    private func omissions(of message: EmailMessage, raw: String, parser: EMLParser) -> [InlineImage.Omission] {
+        return parser.inlineImageParts(of: message.inlineImages, from: raw).map { image, part in
+            // The picture's own size counts only for a side the HTML leaves
+            // open, and reading it decodes the whole picture.
+            let isOpen = image.width == nil || image.height == nil
+            let natural = isOpen ? PixelSize(of: decodeToBytes(part.entity)) : nil
+
+            return InlineImage.Omission(name: part.filename ?? "unnamed", size: image.displaySize(natural: natural))
+        }
     }
 
     /// The naming built from `--attachment-name`, or nil when no pattern was
