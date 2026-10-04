@@ -43,3 +43,34 @@ jobs:
         # The configuration the Homebrew formula builds, so a release-only
         # failure surfaces here instead of at `brew install` time.
         run: swift build -c release
+
+  build-with-oldest-xcode:
+    name: Build with Xcode 16.0
+    # The package declares swift-tools-version 6.0, and the formula asks for
+    # Xcode 16, so this is the oldest toolchain a user may build with. Until
+    # this job existed, nothing had ever built it there. macos-15 is the newest
+    # image that still carries Xcode 16.0 (measured 2026-10-04); when GitHub
+    # removes it from the image, this job fails, and the floor the README and
+    # the formula state has to be checked again rather than quietly raised.
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.app/Contents/Developer
+      TZ: UTC
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Report the toolchain
+        run: swift --version
+
+      - name: Build the release binary
+        # What the formula runs. The test suite stays with the current
+        # toolchain in the job above; this job proves the build, not the tests.
+        run: swift build -c release
+
+      - name: Convert a mail with the binary
+        # The formula's own check, so the binary is shown to run, not only to link.
+        run: |
+          printf 'From: Jane Doe <jane@example.com>\nSubject: Oldest Xcode\nDate: Sun, 15 Jun 2026 09:41:00 +0000\nContent-Type: text/plain; charset=utf-8\n\nHello.\n' > oldest.eml
+          .build/release/mail2md oldest.eml
+          grep -q 'subject: "Oldest Xcode"' oldest.md
