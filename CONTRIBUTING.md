@@ -13,7 +13,7 @@ swift build -c release # must stay warning-free
 make install           # installs to /usr/local/bin
 ```
 
-Requires Swift 6 and macOS 13 or later. There is no formatter and no linter, on purpose (see [Layout and style](#layout-and-style)).
+Building needs Swift 6.0 or newer, so Xcode 16 and macOS 14.5 or later; the package itself targets macOS 13. There is no formatter and no linter, on purpose (see [Layout and style](#layout-and-style)).
 
 ## What belongs in this tool
 
