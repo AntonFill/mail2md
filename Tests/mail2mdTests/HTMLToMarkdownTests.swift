@@ -146,6 +146,78 @@ struct HTMLToMarkdownTests {
 
 // MARK: -
 
+/// Emphasis as Markdown writes it: between markers, which only work at the
+/// edge of a word. Two spans of one kind that meet are one span to a reader,
+/// but written one after the other, `**Software-****Entwicklung**`, their
+/// markers run into four asterisks that Markdown leaves standing as text.
+struct EmphasisTests {
+
+    /// Outlook sets every run of formatting in an element of its own, so a
+    /// bold line can arrive as two `b`, split wherever the formatting inside
+    /// it changed: after a hyphen, before a colon.
+    @Test(arguments: [
+        ("<b><span>Kurs für Software-</span></b><b><span>Entwicklung</span></b>", "**Kurs für Software-Entwicklung**"),
+        ("<b>Workshop am Montag</b><b>:</b>", "**Workshop am Montag:**"),
+        ("<span><b>Teil eins</b></span><span><b>, Teil zwei</b></span>", "**Teil eins, Teil zwei**"),
+        ("<strong>Fett</strong><b>druck</b>", "**Fettdruck**"),
+        ("<b><a href=\"https://example.com\">Anmeldung</a></b><b>:</b>", "**[Anmeldung](https://example.com):**"),
+    ])
+    func joinsBoldSpansThatMeet(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// A job board sets a note in italics, its first word in bold as well,
+    /// each piece in a span of its own.
+    @Test func joinsItalicSpansThatMeet() {
+        let html = "<span><em><strong>Wichtig</strong></em></span><span><em>: bitte bis Freitag antworten.</em></span>"
+
+        #expect(HTMLToMarkdown.convert(html) == "***Wichtig**: bitte bis Freitag antworten.*")
+    }
+
+    /// Only spans whose markers would touch are joined. A space between them
+    /// keeps both readable, and so do a change of kind and a new line.
+    @Test(arguments: [
+        ("<b>Eins</b> <b>Zwei</b>", "**Eins** **Zwei**"),
+        ("<b>Eins </b><b>Zwei</b>", "**Eins** **Zwei**"),
+        ("<b>Fett</b><i>kursiv</i>", "**Fett***kursiv*"),
+        ("<div><b>Eins</b></div><div><b>Zwei</b></div>", "**Eins**\n**Zwei**"),
+    ])
+    func keepsSpansWhoseMarkersDoNotTouchApart(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// A span over two lines is set line by line, and only its last line
+    /// meets the span after it.
+    @Test func joinsTheLastLineOfASpanWithTheSpanAfterIt() {
+        let html = "<b>Zeile eins<br>Zeile zwei</b><b>, Fortsetzung</b>"
+
+        #expect(HTMLToMarkdown.convert(html) == "**Zeile eins**\n**Zeile zwei, Fortsetzung**")
+    }
+
+    /// Emphasis inside emphasis of its own kind adds nothing a reader sees.
+    /// Its markers would only stand doubled, and beside a span that follows
+    /// they would leave a run that Markdown cannot pair.
+    @Test(arguments: [
+        ("<b>Alle <strong>Termine</strong> im Überblick</b>", "**Alle Termine im Überblick**"),
+        ("<i>sehr <em>wichtig</em></i>", "*sehr wichtig*"),
+        ("<strong><b>Doppelt</b></strong><b>:</b>", "**Doppelt:**"),
+    ])
+    func setsNoMarkersInsideEmphasisOfItsOwnKind(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// A row of a layout table whose cells cannot share a line is replayed
+    /// into the note, and the replay joins two spans as laying them out in
+    /// place does.
+    @Test func joinsSpansThatMeetInAReplayedCell() {
+        let html = "<table><tr><td><ul><li>Punkt</li></ul></td><td><b>Fett</b><b>druck</b></td></tr></table>"
+
+        #expect(HTMLToMarkdown.convert(html) == "- Punkt\n\n**Fettdruck**")
+    }
+}
+
+// MARK: -
+
 /// How a browser stacks blocks: a `div` is a line, a `p` a paragraph, and the
 /// element's own style may say otherwise, down to an inline element it makes a
 /// block or gives room at its sides. Markdown knows two spacings, a line break

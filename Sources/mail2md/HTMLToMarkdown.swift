@@ -288,10 +288,8 @@ extension HTMLToMarkdown {
         case "h1", "h2", "h3", "h4", "h5", "h6":
             let level = Int(tag.dropFirst()) ?? 1
             self.heading(element, level: level, into: &layout)
-        case "strong", "b":
-            self.emphasis(element, marker: "**", into: &layout)
-        case "em", "i":
-            self.emphasis(element, marker: "*", into: &layout)
+        case "strong", "b", "em", "i":
+            self.emphasis(element, into: &layout)
         case "a":
             self.link(element, into: &layout)
         case "img":
@@ -468,17 +466,34 @@ extension HTMLToMarkdown {
 // MARK: - Inline elements
 extension HTMLToMarkdown {
 
+    /// The marker each kind of emphasis sets its text between.
+    fileprivate static let emphasisMarkers = ["strong": "**", "b": "**", "em": "*", "i": "*"]
+
     /// Emphasis around each line of text. A picture looks the same with it or
     /// without, so a line of nothing but pictures gets no markers.
-    fileprivate static func emphasis(_ element: Element, marker: String, into layout: inout Layout) {
-        let content = self.content(of: element)
-
-        layout.place(content) { line in
-            guard self.holdsText(line) else {
-                return line
-            }
-            return marker + line + marker
+    ///
+    /// Inside emphasis of its own kind, a `b` in a `strong`, an element adds
+    /// nothing a reader sees and sets no markers, which would only stand
+    /// doubled. Two spans of one kind that meet are joined by the layout, see
+    /// `Layout.write(_:emphasis:)`.
+    fileprivate static func emphasis(_ element: Element, into layout: inout Layout) {
+        guard
+            let marker = self.emphasisMarkers[element.tagName()],
+            self.isInsideEmphasis(element, marker: marker) == false
+        else {
+            self.renderChildren(of: element, into: &layout)
+            return
         }
+
+        layout.emphasize(self.content(of: element)) { line in
+            return self.holdsText(line) ? marker : nil
+        }
+    }
+
+    /// Whether an element around this one sets its text between the same
+    /// marker.
+    fileprivate static func isInsideEmphasis(_ element: Element, marker: String) -> Bool {
+        return element.parents().array().contains { self.emphasisMarkers[$0.tagName()] == marker }
     }
 
     /// A link as `[text](href)`, its text on one line and its brackets
@@ -1267,7 +1282,7 @@ fileprivate struct Layout {
     /// A call the layout received.
     enum Operation {
         case gap(Int)
-        case write(String)
+        case write(String, emphasis: String?)
         case space(nonBreaking: Bool)
         case lineBreak
         case writeLines([String])
@@ -1341,6 +1356,11 @@ fileprivate struct Layout {
     /// The last thing written was a line break.
     private var brokeLine = false
 
+    /// The marker of the emphasis the last text was written in, nil where it
+    /// was written plain. The current line ends with it until a space or a
+    /// line break follows.
+    private var closingMarker: String?
+
     private var pendingGap = 0
     private var leadingGap = 0
     private var leadingSpace = false
@@ -1411,12 +1431,29 @@ fileprivate struct Layout {
         self.pendingGap = max(self.pendingGap, size)
     }
 
-    /// Inline text, its whitespace already collapsed.
-    mutating func write(_ text: String) {
-        self.operations.append(.write(text))
+    /// Inline text, its whitespace already collapsed, set between the marker
+    /// of its emphasis where it has one.
+    ///
+    /// Emphasis that meets emphasis of the same marker continues it: the
+    /// closing marker the current line ends with is taken back, and the text
+    /// goes on without an opening one. Written one after the other, the
+    /// markers of two spans would meet in a run of four, which Markdown does
+    /// not read as the end of one span and the start of the next, so that
+    /// `**Software-****Entwicklung**` leaves asterisks standing as text.
+    /// Outlook splits a bold line into spans like these wherever the
+    /// formatting inside it changed.
+    mutating func write(_ text: String, emphasis marker: String? = nil) {
+        self.operations.append(.write(text, emphasis: marker))
         self.settle()
 
         var piece = Substring(text)
+        if let marker {
+            let continues = self.closingMarker == marker && self.current.hasSuffix(marker)
+            if continues {
+                self.current.removeLast(marker.count)
+            }
+            piece = Substring((continues ? "" : marker) + text + marker)
+        }
         if self.current.isEmpty || self.current.hasSuffix(" ") {
             let stripped = piece.drop { $0 == " " }
             if self.started == false, stripped.count < piece.count {
@@ -1432,6 +1469,7 @@ fileprivate struct Layout {
         self.occupied = true
         self.started = true
         self.brokeLine = false
+        self.closingMarker = marker
     }
 
     /// The space between two words. At the start of a line or before a gap it
@@ -1486,6 +1524,23 @@ fileprivate struct Layout {
     /// Writes content laid out on its own, each line of text passed through
     /// `transform`, with the gaps, spaces and line breaks it had at its edges.
     mutating func place(_ content: Content, transform: (String) -> String) {
+        self.place(content, writeLine: { layout, line in
+            layout.write(transform(line))
+        })
+    }
+
+    /// Writes content laid out on its own in emphasis, each line of text
+    /// between the marker `marker` gives it, none where it gives nil, with
+    /// the gaps, spaces and line breaks it had at its edges.
+    mutating func emphasize(_ content: Content, marker: (String) -> String?) {
+        self.place(content, writeLine: { layout, line in
+            layout.write(line, emphasis: marker(line))
+        })
+    }
+
+    /// Writes content laid out on its own, each line of text by `writeLine`,
+    /// with the gaps, spaces and line breaks it had at its edges.
+    private mutating func place(_ content: Content, writeLine: (inout Layout, String) -> Void) {
         if content.gapBefore > 0 {
             self.gap(content.gapBefore)
         }
@@ -1499,7 +1554,7 @@ fileprivate struct Layout {
                 self.lineBreak()
             }
             if line.isEmpty == false {
-                self.write(transform(line))
+                writeLine(&self, line)
             }
         }
         if content.endsOccupied {
@@ -1520,8 +1575,8 @@ fileprivate struct Layout {
             switch operation {
             case .gap(let size):
                 self.gap(size)
-            case .write(let text):
-                self.write(text)
+            case .write(let text, let marker):
+                self.write(text, emphasis: marker)
             case .space(let nonBreaking):
                 self.space(nonBreaking: nonBreaking)
             case .lineBreak:
