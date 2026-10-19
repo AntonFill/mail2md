@@ -36,13 +36,27 @@ These are not negotiable, and they apply to sources and tests alike.
 - **Explicit `self.`** for member access.
 - **File header comment**, matching the existing files:
   `//  <File>.swift  //  mail2md  //  Created by <author> on DD.MM.YYYY.`
+  The files of the command line module name `realdate` instead, where they come from (see [The command line](#the-command-line)).
 - **Group code with `// MARK: -`** and extensions, rather than one large type body.
 - **Bump `static let version`** in `Mail2md.swift` with every user-visible change.
+
+### The command line
+
+mail2md reads its arguments with `CommandLineOptions`, a module in this package rather than a dependency. It follows getopt: grouped short flags (`-vf`), a value attached or as the next argument (`-onote.md`, `--output=note.md`, `-o note.md`), options before or after the path, and `--` to end them. Its two departures from getopt, and why, are documented on `OptionParser`. `HelpPage` lays the help out the way ArgumentParser did, which this tool used until 1.4.0, and wraps it to the window, or to `COLUMNS`, or to 80 columns in a pipe.
+
+The module is shared with [realdate](https://github.com/AntonFill/realdate), the sibling tool, and kept identical to realdate's copy, file headers included, so a fix reaches both. A change to it is welcome here; it is carried over to realdate before it is merged.
+
+An option lives in four places, and a new one goes into all of them:
+
+1. `optionParser`, where it is declared
+2. `invocation(from:)`, where it becomes a property of the command
+3. `helpPage` with its description, and `synopsis`, the usage line
+4. `InvocationTests`, whose `readsEveryOptionBeforeOrAfterThePath` names every option
 
 ### Tests
 
 - **Swift Testing** (`import Testing`, `@Test`, `#expect`), not XCTest.
-- **One test file per source file**, named after it: `BodyCleanerTests.swift` covers `BodyCleaner.swift`. A file holds more than one suite where its source does more than one job: `EMLParserTests.swift` adds `BodySelectionTests`, `InvisibleTextTests`, `CharsetFallbackTests`, `AttachmentsTests` and `InlineImagePartsTests`, because body selection, the invisible-character rule on a whole mail, reading a file that is not UTF-8, attachment selection and finding the part of each picture the body shows live in `EMLParser`; `MIMEDecodingTests.swift` adds `Windows1252Tests`, because ISO-8859-1, ASCII and windows-1252 are read through a table of their own, and every decoder that reaches it needs a test, and `AddressListTests`, because an address header is split into mailboxes before anything in it is decoded; `MarkdownRendererTests.swift` adds `AttachmentBlockTests` and `FrontmatterContractTests`, because the closing attachment block and the frontmatter's key set are the renderer's; and `HTMLToMarkdownTests.swift` adds one suite per layout concern (`BlockLayoutTests`, `HiddenElementTests`, `PreformattedTextTests`, `TableTests`, `PictureTests`) plus `SenderStackTests`, one constructed snippet per sender stack with the whole expected note.
+- **One test file per source file**, named after it: `BodyCleanerTests.swift` covers `BodyCleaner.swift`. A file holds more than one suite where its source does more than one job: `Mail2mdTests.swift` adds `InvocationTests`, because reading the command line is a function and needs no binary; `EMLParserTests.swift` adds `BodySelectionTests`, `InvisibleTextTests`, `CharsetFallbackTests`, `AttachmentsTests` and `InlineImagePartsTests`, because body selection, the invisible-character rule on a whole mail, reading a file that is not UTF-8, attachment selection and finding the part of each picture the body shows live in `EMLParser`; `MIMEDecodingTests.swift` adds `Windows1252Tests`, because ISO-8859-1, ASCII and windows-1252 are read through a table of their own, and every decoder that reaches it needs a test, and `AddressListTests`, because an address header is split into mailboxes before anything in it is decoded; `MarkdownRendererTests.swift` adds `AttachmentBlockTests` and `FrontmatterContractTests`, because the closing attachment block and the frontmatter's key set are the renderer's; and `HTMLToMarkdownTests.swift` adds one suite per layout concern (`BlockLayoutTests`, `HiddenElementTests`, `PreformattedTextTests`, `TableTests`, `PictureTests`) plus `SenderStackTests`, one constructed snippet per sender stack with the whole expected note.
 - **Shared EML fixtures live in `EMLFixtures.swift`**, not in whichever suite happened to need one first.
 - **`Mail2mdTests.swift` is the acceptance suite** and the only one that leaves the process: each test launches the built binary and pins one thing a user can observe (the file that appears, an exit code, an exact stderr line, an empty stdout). Add to it when you change what the command *does*; leave parsing and rendering detail to the library suites, which are cheaper and say more precisely where a break is. Its subprocess plumbing lives in `CommandRunner.swift`, beside the suite for the same reason the fixtures do.
 - **Fixtures are inline multiline strings** with explicit `\r` line endings. Those are two-character escapes inside the literal, not real carriage returns, so reindenting them is safe and a careless search-and-replace is not. A file that is not UTF-8 cannot be a Swift string, so such a fixture is written as one and turned into bytes by `latin1(_:)`, one byte per character.
@@ -52,6 +66,7 @@ These are not negotiable, and they apply to sources and tests alike.
 ### Output and errors
 
 - Error style is Unix: `mail2md: <path>: <message>`.
+- **A command line the tool cannot use is refused in `invocation(from:)`**, by throwing a `UsageError`: the tool's line and the usage go to stderr, the exit code is 64, and nothing has been read yet. Once the run has started, a failure exits 1. (An unknown placeholder in `--attachment-name` is still found in the run and exits 1, as before 1.4.0.)
 - **Everything printed goes to stderr.** The product of this tool is the Markdown file, not the console text, so stdout stays empty: `2>/dev/null` then silences the noise and nothing else, and stdout stays free for the planned piping mode.
 - All output goes through `printIf`, including unconditional messages as `printIf(true, …)`. Pass `to: .standardOutput` only for output that is genuinely data.
 

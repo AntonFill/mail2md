@@ -11,9 +11,10 @@ import Testing
 
 /// Acceptance level of the test pyramid: every test here launches the built
 /// binary as a subprocess (see `CommandRunner`), so what is under test is the
-/// command a user types. Argument parsing, exit codes, the stdout/stderr split
-/// and the file that actually lands on disk are only visible from here; the
-/// library suites next to this file cannot see any of it.
+/// command a user types. Exit codes, the stdout/stderr split and the file that
+/// actually lands on disk are only visible from here; the library suites next
+/// to this file cannot see any of it. How a command line is read is a function
+/// since 1.4.0, so `InvocationTests` below covers it in process.
 ///
 /// The suite stays thin on purpose. The top layer is the second line of defence,
 /// not the first: body decoding, attachment selection and rendering details are
@@ -356,7 +357,93 @@ struct Mail2mdTests {
         #expect(try command.read("newsletter.md").contains("subject: \"API versioning\""))
     }
 
+    @Test func noteThatCannotBeWrittenFailsWithUnixStyleError() throws {
+        let command = try CommandRunner()
+        let locked = command.path("locked")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            command.removeWorkspace()
+        }
+        let input = try command.write(simpleEML, named: "mail.eml")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+        let output = locked.appendingPathComponent("mail.md")
+
+        let run = try command.run(["--output", output.path, input.path])
+
+        // Until 1.4.0 ArgumentParser printed Foundation's localized sentence as
+        // `Error: …`, which names the folder but not the path.
+        #expect(run.exitCode == 1)
+        #expect(run.standardOutput.isEmpty)
+        #expect(run.standardError == "mail2md: \(output.path): cannot be written\n")
+    }
+
+    @Test func attachmentsThatCannotBeWrittenFailWithUnixStyleError() throws {
+        let command = try CommandRunner()
+        let locked = command.path("locked")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            command.removeWorkspace()
+        }
+        let input = try command.write(inlineDocumentEML, named: "gesuch.eml")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+
+        let run = try command.run(["--attachments-dir", locked.path, input.path])
+
+        #expect(run.exitCode == 1)
+        #expect(run.standardOutput.isEmpty)
+        #expect(run.standardError == "mail2md: \(locked.path): cannot be written\n")
+    }
+
+    // MARK: - Refusing the command line
+
+    @Test func refusesToRunWithoutAPath() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+
+        let run = try command.run([])
+
+        // 64 is EX_USAGE from sysexits(3), what rm and cp exit with on a usage
+        // error; ArgumentParser used it too.
+        #expect(run.exitCode == 64)
+        #expect(run.standardOutput.isEmpty)
+        // The whole stream, so the shape is pinned too: the tool's own line, then
+        // the usage.
+        #expect(run.standardError == "mail2md: missing path\n\(Mail2md.usage)\n")
+    }
+
+    @Test func rejectsAnUnknownOptionWithoutWritingAnything() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(simpleEML, named: "mail.eml")
+
+        let run = try command.run(["--bogus", input.path])
+
+        #expect(run.exitCode == 64)
+        #expect(run.standardError.hasPrefix("mail2md: unknown option '--bogus'\n"))
+        #expect(command.exists("mail.md") == false)
+    }
+
     // MARK: - Reporting itself
+
+    @Test func printsItsHelpWrappedToColumns() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+
+        let wide = try command.run(["--help"], environment: ["COLUMNS": "120"])
+        // Standard output is a file here, so without COLUMNS there is no window
+        // to measure, and the help falls back to 80 columns.
+        let plain = try command.run(["--help"], environment: ["COLUMNS": nil])
+
+        // Help that was asked for is data, hence stdout and exit 0.
+        #expect(wide.exitCode == 0)
+        #expect(wide.standardError.isEmpty)
+        #expect(wide.standardOutput == Mail2md.helpPage.rendered(width: 120) + "\n")
+        #expect(plain.standardOutput == Mail2md.helpPage.rendered(width: 80) + "\n")
+        // The two only differ if the width actually reached the layout.
+        #expect(wide.standardOutput != plain.standardOutput)
+    }
 
     @Test func reportsItsVersionOnStandardOutput() throws {
         let command = try CommandRunner()
@@ -369,6 +456,70 @@ struct Mail2mdTests {
         #expect(run.exitCode == 0)
         #expect(run.standardOutput == Mail2md.version + "\n")
         #expect(run.standardError.isEmpty)
+    }
+}
+
+// MARK: - Invocation
+
+/// How a command line turns into a command, in process. The getopt rules
+/// themselves are pinned in `OptionParserTests`; this suite pins what mail2md
+/// makes of them. Until 1.4.0 ArgumentParser read the line, and the cases it
+/// answered differently are noted where they stand.
+struct InvocationTests {
+
+    @Test func pathAloneGivesTheDefaults() throws {
+        #expect(try Mail2md.invocation(from: ["mail.eml"]) == .run(Mail2md(path: "mail.eml")))
+    }
+
+    @Test func readsEveryOptionBeforeOrAfterThePath() throws {
+        let expected = Mail2md(output: "note.md", verbose: true, force: true, extractAttachments: true, attachmentsDir: "files", attachmentName: "ENCL {name}", inlineImages: true, path: "mail.eml")
+
+        #expect(try Mail2md.invocation(from: ["-vf", "-o", "note.md", "--extract-attachments", "--attachments-dir", "files", "--attachment-name", "ENCL {name}", "--inline-images", "mail.eml"]) == .run(expected))
+        #expect(try Mail2md.invocation(from: ["mail.eml", "--output=note.md", "--verbose", "--force", "--extract-attachments", "--attachments-dir=files", "--attachment-name=ENCL {name}", "--inline-images"]) == .run(expected))
+    }
+
+    @Test func takesTheOutputAttachedToItsShortForm() throws {
+        // getopt's `-ofile`. ArgumentParser refused it and asked for the path.
+        #expect(try Mail2md.invocation(from: ["-onote.md", "mail.eml"]) == .run(Mail2md(output: "note.md", path: "mail.eml")))
+    }
+
+    @Test func countsTheLastValueOfARepeatedOption() throws {
+        #expect(try Mail2md.invocation(from: ["-o", "a.md", "-o", "b.md", "mail.eml"]) == .run(Mail2md(output: "b.md", path: "mail.eml")))
+    }
+
+    @Test func reachesAPathThatStartsWithADashAfterADoubleDash() throws {
+        #expect(try Mail2md.invocation(from: ["--", "-mail.eml"]) == .run(Mail2md(path: "-mail.eml")))
+    }
+
+    @Test func needsNoPathForHelpOrTheVersion() throws {
+        #expect(try Mail2md.invocation(from: ["--help"]) == .help)
+        #expect(try Mail2md.invocation(from: ["-h"]) == .help)
+        #expect(try Mail2md.invocation(from: ["--version"]) == .version)
+        #expect(try Mail2md.invocation(from: ["mail.eml", "--version"]) == .version)
+    }
+
+    @Test func refusesACommandLineWithoutAPathOrWithTwo() throws {
+        #expect(throws: Mail2md.UsageError(description: "missing path")) {
+            try Mail2md.invocation(from: ["-v"])
+        }
+        // What a glob with two matches produces; the shell, not the user, typed the second.
+        #expect(throws: Mail2md.UsageError(description: "unexpected argument 'b.eml'")) {
+            try Mail2md.invocation(from: ["a.eml", "b.eml"])
+        }
+    }
+
+    @Test func passesTheParsersRefusalOnInTheToolsWords() throws {
+        #expect(throws: Mail2md.UsageError(description: "unknown option '--bogus'")) {
+            try Mail2md.invocation(from: ["--bogus", "mail.eml"])
+        }
+        #expect(throws: Mail2md.UsageError(description: "option '-o' needs a value")) {
+            try Mail2md.invocation(from: ["mail.eml", "-o"])
+        }
+        // A wrong command line is refused whatever else it holds, as in realdate.
+        // ArgumentParser showed the help here.
+        #expect(throws: Mail2md.UsageError(description: "unknown option '--bogus'")) {
+            try Mail2md.invocation(from: ["-h", "--bogus"])
+        }
     }
 }
 

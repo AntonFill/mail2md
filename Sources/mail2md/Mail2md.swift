@@ -5,43 +5,23 @@
 //  Created by Anton Fillmann on 07.07.2026.
 //
 
-import ArgumentParser
+import CommandLineOptions
 import Foundation
 
 @main
-struct Mail2md: ParsableCommand {
+struct Mail2md: Equatable {
     static let appname = "mail2md"
     static let abstract = "Convert .eml files to Markdown with YAML frontmatter."
-    static let version = "1.3.1"
+    static let version = "1.4.0"
 
-    static let configuration = CommandConfiguration(
-        commandName: Self.appname,
-        abstract: Self.abstract,
-        version: Self.version
-    )
-
-    @Option(name: .shortAndLong, help: "Output file path. Defaults to the input path with .md extension.")
-    var output: String?
-
-    @Flag(name: .shortAndLong, help: "Show detailed information.")
+    // What each option does is said once, in `helpPage`.
+    var output: String? = nil
     var verbose = false
-
-    @Flag(name: .shortAndLong, help: "Overwrite existing output files that differ from the generated Markdown.")
     var force = false
-
-    @Flag(name: .long, help: "Write attachment files (next to the output, or into --attachments-dir) and link them from the note.")
     var extractAttachments = false
-
-    @Option(name: .long, help: "Directory for extracted attachments; implies --extract-attachments. Defaults next to the output.")
-    var attachmentsDir: String?
-
-    @Option(name: .long, help: "Rename extracted attachments after a pattern, e.g. \"{date} {time} ENCL {name}\"; placeholders are {name}, {ext}, {date} and {time}, the latter two with an optional format ({date:yyyy.MM.dd}). Implies --extract-attachments.")
-    var attachmentName: String?
-
-    @Flag(name: .long, help: "Write the pictures the mail shows from its own parts (cid:) as files too, and embed each where it stands. Implies --extract-attachments.")
+    var attachmentsDir: String? = nil
+    var attachmentName: String? = nil
     var inlineImages = false
-
-    @Argument(help: "Path to an .eml file.")
     var path: String
 
     /// A planned extraction: which parts go where, and under which names.
@@ -62,19 +42,19 @@ struct Mail2md: ParsableCommand {
         let imageNames: [String: String]
     }
 
-    mutating func run() throws {
+    func run() throws {
         let inputURL = URL(fileURLWithPath: self.path)
         var isDirectory: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: self.path, isDirectory: &isDirectory)
 
         guard exists else {
             printIf(true, "mail2md: \(self.path): No such file")
-            throw ExitCode.failure
+            throw Failure()
         }
 
         guard isDirectory.boolValue == false else {
             printIf(true, "mail2md: \(self.path): Is a directory")
-            throw ExitCode.failure
+            throw Failure()
         }
 
         let (parser, raw) = try self.read(inputURL)
@@ -126,13 +106,34 @@ struct Mail2md: ParsableCommand {
         }
         catch let conflict as MarkdownWriter.Conflict {
             printIf(true, "mail2md: \(conflict.path): differs from generated output (use --force to overwrite)")
-            throw ExitCode.failure
+            throw Failure()
+        }
+        catch {
+            // Named the way the conflict above names it, so one file is not
+            // reported under two paths.
+            self.reportWriteFailure(at: document.url.path, error)
+            throw Failure()
         }
 
         if let extraction {
-            let written = try extraction.extractor.extract(extraction.parts)
-            printIf(self.verbose, "mail2md: extracted \(written.count) attachment(s) to \(extraction.extractor.directory.path)")
+            do {
+                let written = try extraction.extractor.extract(extraction.parts)
+                printIf(self.verbose, "mail2md: extracted \(written.count) attachment(s) to \(extraction.extractor.directory.path)")
+            }
+            catch {
+                self.reportWriteFailure(at: extraction.extractor.directory.path, error)
+                throw Failure()
+            }
         }
+    }
+
+    /// Reports a file that could not be written, in the shape `read(_:)` reports
+    /// one that could not be read, and for the same reason: Foundation's own text
+    /// names no path the way this tool does and is localized, so it stays behind
+    /// `--verbose`. Until 1.4.0 ArgumentParser printed it as `Error: …`.
+    private func reportWriteFailure(at path: String, _ error: Error) {
+        printIf(true, "mail2md: \(path): cannot be written")
+        printIf(self.verbose, "mail2md: \(path): \(error.localizedDescription)")
     }
 
     /// Reads the input file as a mail: as UTF-8 text when it is, otherwise byte
@@ -152,12 +153,12 @@ struct Mail2md: ParsableCommand {
         catch {
             printIf(true, "mail2md: \(self.path): cannot be read")
             printIf(self.verbose, "mail2md: \(self.path): \(error.localizedDescription)")
-            throw ExitCode.failure
+            throw Failure()
         }
 
         guard let reading = EMLParser.reading(data) else {
             printIf(true, "mail2md: \(self.path): not valid UTF-8 text, nor in a charset it declares")
-            throw ExitCode.failure
+            throw Failure()
         }
         if reading.parser.source != .utf8 {
             printIf(self.verbose, "mail2md: \(self.path): not UTF-8, read byte for byte in the charsets it declares")
@@ -232,7 +233,7 @@ struct Mail2md: ParsableCommand {
         let unknown = AttachmentNaming.unknownPlaceholders(in: pattern)
         guard unknown.isEmpty else {
             printIf(true, "mail2md: {\(unknown.joined(separator: "}, {"))}: unknown placeholder in --attachment-name")
-            throw ExitCode.failure
+            throw Failure()
         }
 
         if date == nil, AttachmentNaming.requiresDate(pattern) {
@@ -241,6 +242,152 @@ struct Mail2md: ParsableCommand {
         }
 
         return AttachmentNaming(pattern: pattern, date: date)
+    }
+}
+
+// MARK: - Command line
+extension Mail2md {
+
+    /// What a command line asks for.
+    enum Invocation: Equatable {
+        case help
+        case version
+        case run(Mail2md)
+    }
+
+    /// A command line the command refuses before anything ran. It ends in exit code 64.
+    struct UsageError: Error, Equatable, CustomStringConvertible {
+        let description: String
+    }
+
+    /// The run failed. What went wrong is already on stderr, so this only carries
+    /// the outcome to the exit code, which is 1.
+    struct Failure: Error {}
+
+    static let optionParser = OptionParser([
+        .value("output", short: "o"),
+        .flag("verbose", short: "v"),
+        .flag("force", short: "f"),
+        .flag("extract-attachments"),
+        .value("attachments-dir"),
+        .value("attachment-name"),
+        .flag("inline-images"),
+        .flag("version"),
+        .flag("help", short: "h"),
+    ])
+
+    /// Reads the arguments after the command's name.
+    ///
+    /// An option given twice counts with its last value, as it did under
+    /// ArgumentParser.
+    static func invocation(from arguments: [String]) throws -> Invocation {
+        let parsed: ParsedArguments
+        do {
+            parsed = try Self.optionParser.parse(arguments)
+        }
+        catch {
+            throw UsageError(description: "\(error)")
+        }
+
+        // Help and the version need nothing else on the line, not even a path.
+        if parsed.isSet("help") {
+            return .help
+        }
+        if parsed.isSet("version") {
+            return .version
+        }
+
+        guard let path = parsed.operands.first else {
+            throw UsageError(description: "missing path")
+        }
+        guard parsed.operands.count == 1 else {
+            throw UsageError(description: "unexpected argument '\(parsed.operands[1])'")
+        }
+
+        let command = Mail2md(
+            output: parsed.value(of: "output"),
+            verbose: parsed.isSet("verbose"),
+            force: parsed.isSet("force"),
+            extractAttachments: parsed.isSet("extract-attachments"),
+            attachmentsDir: parsed.value(of: "attachments-dir"),
+            attachmentName: parsed.value(of: "attachment-name"),
+            inlineImages: parsed.isSet("inline-images"),
+            path: path
+        )
+        return .run(command)
+    }
+}
+
+// MARK: - Help
+extension Mail2md {
+
+    /// The command line in brief, shared by the help and the usage error.
+    static let synopsis = "mail2md [--output <output>] [--verbose] [--force] [--extract-attachments] [--attachments-dir <attachments-dir>] [--attachment-name <attachment-name>] [--inline-images] <path>"
+
+    /// What follows a usage error, the way `rm` and `cp` print theirs.
+    static let usage = """
+        usage: \(Mail2md.synopsis)
+        See 'mail2md --help' for more information.
+        """
+
+    /// Laid out in ArgumentParser's layout and wrapped to the window, as the help
+    /// was up to 1.3.1.
+    static let helpPage = HelpPage(
+        overview: Mail2md.abstract,
+        usage: Mail2md.synopsis,
+        sections: [
+            HelpPage.Section("ARGUMENTS", [
+                HelpPage.Entry("<path>", "Path to an .eml file."),
+            ]),
+            HelpPage.Section("OPTIONS", [
+                HelpPage.Entry("-o, --output <output>", "Output file path. Defaults to the input path with .md extension."),
+                HelpPage.Entry("-v, --verbose", "Show detailed information."),
+                HelpPage.Entry("-f, --force", "Overwrite existing output files that differ from the generated Markdown."),
+                HelpPage.Entry("--extract-attachments", "Write attachment files (next to the output, or into --attachments-dir) and link them from the note."),
+                HelpPage.Entry("--attachments-dir <attachments-dir>", "Directory for extracted attachments; implies --extract-attachments. Defaults next to the output."),
+                HelpPage.Entry("--attachment-name <attachment-name>", "Rename extracted attachments after a pattern, e.g. \"{date} {time} ENCL {name}\"; placeholders are {name}, {ext}, {date} and {time}, the latter two with an optional format ({date:yyyy.MM.dd}). Implies --extract-attachments."),
+                HelpPage.Entry("--inline-images", "Write the pictures the mail shows from its own parts (cid:) as files too, and embed each where it stands. Implies --extract-attachments."),
+                HelpPage.Entry("--version", "Show the version."),
+                HelpPage.Entry("-h, --help", "Show help information."),
+            ]),
+        ]
+    )
+}
+
+// MARK: - Entry point
+extension Mail2md {
+
+    static func main() {
+        let invocation: Invocation
+        do {
+            invocation = try Self.invocation(from: Array(CommandLine.arguments.dropFirst()))
+        }
+        catch {
+            // EX_USAGE, the code `rm` and `cp` exit with on a command line they cannot use.
+            printIf(true, "mail2md: \(error)")
+            printIf(true, Self.usage)
+            exit(EX_USAGE)
+        }
+
+        switch invocation {
+        case .help:
+            printIf(true, Self.helpPage.rendered(width: HelpPage.screenWidth), to: .standardOutput)
+        case .version:
+            printIf(true, Self.version, to: .standardOutput)
+        case .run(let command):
+            do {
+                try command.run()
+            }
+            catch is Failure {
+                exit(EXIT_FAILURE)
+            }
+            catch {
+                // Every failure the run knows of is reported where it happens and
+                // arrives here as `Failure`. Anything else would end without a word.
+                printIf(true, "mail2md: \(error.localizedDescription)")
+                exit(EXIT_FAILURE)
+            }
+        }
     }
 }
 
