@@ -43,28 +43,13 @@ struct Mail2md: Equatable {
     }
 
     func run() throws {
-        let inputURL = URL(fileURLWithPath: self.path)
-        var isDirectory: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: self.path, isDirectory: &isDirectory)
-
-        guard exists else {
-            printIf(true, "mail2md: \(self.path): No such file")
-            throw Failure()
-        }
-
-        guard isDirectory.boolValue == false else {
-            printIf(true, "mail2md: \(self.path): Is a directory")
-            throw Failure()
-        }
-
-        let (parser, raw) = try self.read(inputURL)
+        let (parser, raw) = try self.read()
         let reading = parser.parse(raw)
-        let outputPath = self.output ?? inputURL.deletingPathExtension().appendingPathExtension("md").path
 
         // An empty `created` is silent data loss in the vault: warn unconditionally
         // rather than only under --verbose.
         if reading.date == nil {
-            printIf(true, "mail2md: \(self.path): missing or unparsable Date header (created left empty)")
+            printIf(true, "mail2md: \(self.inputName): missing or unparsable Date header (created left empty)")
         }
 
         // Extraction is only planned here. The note is written first, so a
@@ -73,7 +58,7 @@ struct Mail2md: Equatable {
         // the body shows is embedded under the name of its file, and the first
         // reading is what says which pictures it shows, so the body is read
         // once more with those names.
-        let extraction = try self.planExtraction(from: raw, parser: parser, message: reading, outputPath: outputPath)
+        let extraction = try self.planExtraction(from: raw, parser: parser, message: reading)
         let imageNames = extraction?.imageNames ?? [:]
         let message = imageNames.isEmpty ? reading : EMLParser(source: parser.source, imageNames: imageNames).parse(raw)
         let noted = extraction.map { message.replacingAttachments(with: $0.attachments) } ?? message
@@ -81,39 +66,21 @@ struct Mail2md: Equatable {
         // Removing characters changes what the note says, and what was kept may
         // still hide something, so both are reported without being asked.
         if message.invisibleCharacters.isEmpty == false {
-            printIf(true, "mail2md: \(self.path): \(message.invisibleCharacters.summary)")
+            printIf(true, "mail2md: \(self.inputName): \(message.invisibleCharacters.summary)")
         }
 
         // A picture left out of the note may be its point, a screenshot, and
         // only a reader can tell it from a logo, so each one is named.
         let omissions = self.inlineImages ? [] : self.omissions(of: message, raw: raw, parser: parser)
         if omissions.isEmpty == false {
-            printIf(true, "mail2md: \(self.path): \(InlineImage.summary(omissions)) (use --inline-images to include them)")
+            printIf(true, "mail2md: \(self.inputName): \(InlineImage.summary(omissions)) (use --inline-images to include them)")
         }
 
         // One .eml converts to exactly one Markdown file. A quoted reply chain
         // stays in that single file (as the mail itself keeps it); the semantic
         // per-message split is the consumer's job, not this stateless converter's.
         let renderer = MarkdownRenderer(linksAttachments: extraction != nil)
-        let document = MarkdownWriter.Document(
-            url: URL(fileURLWithPath: outputPath),
-            content: renderer.render(noted)
-        )
-
-        do {
-            let written = try MarkdownWriter(force: self.force).writeAll([document])
-            printIf(self.verbose, "mail2md: \(self.path) → \(outputPath) (\(written.isEmpty ? "unchanged" : "written"))")
-        }
-        catch let conflict as MarkdownWriter.Conflict {
-            printIf(true, "mail2md: \(conflict.path): differs from generated output (use --force to overwrite)")
-            throw Failure()
-        }
-        catch {
-            // Named the way the conflict above names it, so one file is not
-            // reported under two paths.
-            self.reportWriteFailure(at: document.url.path, error)
-            throw Failure()
-        }
+        try self.write(renderer.render(noted))
 
         if let extraction {
             do {
@@ -127,7 +94,42 @@ struct Mail2md: Equatable {
         }
     }
 
-    /// Reports a file that could not be written, in the shape `read(_:)` reports
+    /// Writes the note where `destination` says: into its file, unless that
+    /// already holds something else, or to stdout.
+    private func write(_ content: String) throws {
+        let writer = MarkdownWriter(force: self.force)
+
+        switch self.destination {
+        case .file(let outputPath):
+            let document = MarkdownWriter.Document(url: URL(fileURLWithPath: outputPath), content: content)
+
+            do {
+                let written = try writer.writeAll([document])
+                printIf(self.verbose, "mail2md: \(self.inputName) → \(outputPath) (\(written.isEmpty ? "unchanged" : "written"))")
+            }
+            catch let conflict as MarkdownWriter.Conflict {
+                printIf(true, "mail2md: \(conflict.path): differs from generated output (use --force to overwrite)")
+                throw Failure()
+            }
+            catch {
+                // Named the way the conflict above names it, so one file is not
+                // reported under two paths.
+                self.reportWriteFailure(at: document.url.path, error)
+                throw Failure()
+            }
+        case .standardOutput:
+            do {
+                try writer.writeToStandardOutput(content)
+                printIf(self.verbose, "mail2md: \(self.inputName) → (standard output)")
+            }
+            catch {
+                self.reportWriteFailure(at: "(standard output)", error)
+                throw Failure()
+            }
+        }
+    }
+
+    /// Reports a file that could not be written, in the shape `read()` reports
     /// one that could not be read, and for the same reason: Foundation's own text
     /// names no path the way this tool does and is localized, so it stays behind
     /// `--verbose`. Until 1.4.0 ArgumentParser printed it as `Error: …`.
@@ -136,35 +138,74 @@ struct Mail2md: Equatable {
         printIf(self.verbose, "mail2md: \(path): \(error.localizedDescription)")
     }
 
-    /// Reads the input file as a mail: as UTF-8 text when it is, otherwise byte
-    /// for byte in the charsets it declares (`EMLParser.reading`).
+    /// Reads the mail, from its file or from stdin: as UTF-8 text when it is,
+    /// otherwise byte for byte in the charsets it declares (`EMLParser.reading`).
     ///
     /// Foundation's own failure is unusable as CLI output: it names no path, it is
     /// localized, and it does not follow this tool's `mail2md: <path>: <message>`
-    /// shape. So both ways this can fail are translated into that shape, and the
+    /// shape. So every way this can fail is translated into that shape, and the
     /// underlying reason stays available under `--verbose` (v1.0.2, found by the
     /// acceptance tests: no library test can see what the command prints).
-    private func read(_ url: URL) throws -> (parser: EMLParser, raw: String) {
+    private func read() throws -> (parser: EMLParser, raw: String) {
         let data: Data
-
-        do {
-            data = try Data(contentsOf: url)
+        if self.readsStandardInput {
+            data = try self.standardInputData()
         }
-        catch {
-            printIf(true, "mail2md: \(self.path): cannot be read")
-            printIf(self.verbose, "mail2md: \(self.path): \(error.localizedDescription)")
-            throw Failure()
+        else {
+            data = try self.fileData()
         }
 
         guard let reading = EMLParser.reading(data) else {
-            printIf(true, "mail2md: \(self.path): not valid UTF-8 text, nor in a charset it declares")
+            printIf(true, "mail2md: \(self.inputName): not valid UTF-8 text, nor in a charset it declares")
             throw Failure()
         }
         if reading.parser.source != .utf8 {
-            printIf(self.verbose, "mail2md: \(self.path): not UTF-8, read byte for byte in the charsets it declares")
+            printIf(self.verbose, "mail2md: \(self.inputName): not UTF-8, read byte for byte in the charsets it declares")
         }
 
         return reading
+    }
+
+    /// The bytes of the input file, after the two checks Foundation would
+    /// answer in its own words: that the file exists, and that it is no directory.
+    private func fileData() throws -> Data {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: self.path, isDirectory: &isDirectory)
+
+        guard exists else {
+            printIf(true, "mail2md: \(self.path): No such file")
+            throw Failure()
+        }
+
+        guard isDirectory.boolValue == false else {
+            printIf(true, "mail2md: \(self.path): Is a directory")
+            throw Failure()
+        }
+
+        do {
+            return try Data(contentsOf: URL(fileURLWithPath: self.path))
+        }
+        catch {
+            self.reportReadFailure(error)
+            throw Failure()
+        }
+    }
+
+    /// Everything on stdin, up to its end. Nothing at all is an empty mail, as an
+    /// empty file is.
+    private func standardInputData() throws -> Data {
+        do {
+            return try FileHandle.standardInput.readToEnd() ?? Data()
+        }
+        catch {
+            self.reportReadFailure(error)
+            throw Failure()
+        }
+    }
+
+    private func reportReadFailure(_ error: Error) {
+        printIf(true, "mail2md: \(self.inputName): cannot be read")
+        printIf(self.verbose, "mail2md: \(self.inputName): \(error.localizedDescription)")
     }
 
     /// Plans the attachment extraction, or nil when none was asked for.
@@ -179,15 +220,15 @@ struct Mail2md: Equatable {
     /// would collide, an attachment keeps the name it has without them. A
     /// picture whose part is an attachment of its own is planned once, as that
     /// attachment, and embedded all the same.
-    private func planExtraction(from raw: String, parser: EMLParser, message: EmailMessage, outputPath: String) throws -> Extraction? {
-        guard self.extractAttachments || self.attachmentsDir != nil || self.attachmentName != nil || self.inlineImages else {
+    private func planExtraction(from raw: String, parser: EMLParser, message: EmailMessage) throws -> Extraction? {
+        guard self.extractsAttachments else {
             return nil
         }
 
         let shown = self.inlineImages ? Set(message.inlineImages.map { $0.contentID }) : []
         let pictureParts = self.inlineImages ? parser.inlineImageParts(of: message.inlineImages, from: raw).map { $0.part } : []
         let parts = parser.attachmentParts(from: raw) + pictureParts
-        let directory = self.attachmentsDir.map { URL(fileURLWithPath: $0) } ?? URL(fileURLWithPath: outputPath).deletingLastPathComponent()
+        let directory = try self.attachmentsDirectory()
         let extractor = AttachmentExtractor(directory: directory, naming: try self.naming(for: message.date))
         let names = extractor.plannedNames(parts)
 
@@ -204,6 +245,24 @@ struct Mail2md: Equatable {
         }
 
         return Extraction(parts: parts, extractor: extractor, attachments: attachments, imageNames: imageNames)
+    }
+
+    /// The directory extracted files go to: the one `--attachments-dir` names,
+    /// else the one the note is written to.
+    ///
+    /// A note on stdout is written to no directory, so `invocation(from:)`
+    /// refuses extraction there without `--attachments-dir`. The check stands
+    /// here as well, so that no command writes files into a directory nobody
+    /// named.
+    private func attachmentsDirectory() throws -> URL {
+        if let attachmentsDir = self.attachmentsDir {
+            return URL(fileURLWithPath: attachmentsDir)
+        }
+        guard case .file(let outputPath) = self.destination else {
+            printIf(true, "mail2md: \(Self.attachmentsNeedDirectory)")
+            throw Failure()
+        }
+        return URL(fileURLWithPath: outputPath).deletingLastPathComponent()
     }
 
     /// The pictures from parts of the mail that the body shows and the note
@@ -237,12 +296,67 @@ struct Mail2md: Equatable {
         }
 
         if date == nil, AttachmentNaming.requiresDate(pattern) {
-            printIf(true, "mail2md: \(self.path): --attachment-name needs the mail's date (attachments keep their own names)")
+            printIf(true, "mail2md: \(self.inputName): --attachment-name needs the mail's date (attachments keep their own names)")
             return nil
         }
 
         return AttachmentNaming(pattern: pattern, date: date)
     }
+}
+
+// MARK: - Input and output
+extension Mail2md {
+
+    /// Where the note goes.
+    enum Destination: Equatable {
+        case file(String)
+        case standardOutput
+    }
+
+    /// `-` as the path reads the mail from stdin, as `cat -` and `tar -f -` do.
+    /// Only the dash does: run by an agent, stdin can be an open socket that
+    /// never ends (measured in Claude Code's shell on 2026-10-19), and a tool
+    /// that read stdin whenever the path is missing would wait there instead of
+    /// saying that the path is missing.
+    var readsStandardInput: Bool {
+        return self.path == "-"
+    }
+
+    /// How messages name the input: its path, or `(standard input)`, the name
+    /// POSIX gives it in the output of `grep`.
+    var inputName: String {
+        if self.readsStandardInput {
+            return "(standard input)"
+        }
+        return self.path
+    }
+
+    /// The file `--output` names, else the input's path with `.md`; stdout for
+    /// `--output -`, and for a mail read from stdin unless `--output` names a file.
+    var destination: Destination {
+        if let output = self.output {
+            if output == "-" {
+                return .standardOutput
+            }
+            return .file(output)
+        }
+        if self.readsStandardInput {
+            return .standardOutput
+        }
+        return .file(URL(fileURLWithPath: self.path).deletingPathExtension().appendingPathExtension("md").path)
+    }
+
+    /// Whether the run writes files besides the note. Each of the four options
+    /// asks for it: naming files, a directory for them or pictures embedded from
+    /// them are meaningless without the files.
+    var extractsAttachments: Bool {
+        return self.extractAttachments || self.attachmentsDir != nil || self.attachmentName != nil || self.inlineImages
+    }
+
+    /// Why a note on stdout cannot take attachments along without being told
+    /// where: it is written to no directory they could go next to, and the
+    /// working directory would be a guess.
+    static let attachmentsNeedDirectory = "attachments need --attachments-dir when the note goes to standard output"
 }
 
 // MARK: - Command line
@@ -314,6 +428,10 @@ extension Mail2md {
             inlineImages: parsed.isSet("inline-images"),
             path: path
         )
+
+        if command.destination == .standardOutput, command.extractsAttachments, command.attachmentsDir == nil {
+            throw UsageError(description: Self.attachmentsNeedDirectory)
+        }
         return .run(command)
     }
 }
@@ -337,14 +455,14 @@ extension Mail2md {
         usage: Mail2md.synopsis,
         sections: [
             HelpPage.Section("ARGUMENTS", [
-                HelpPage.Entry("<path>", "Path to an .eml file."),
+                HelpPage.Entry("<path>", "Path to an .eml file, or - to read the mail from standard input."),
             ]),
             HelpPage.Section("OPTIONS", [
-                HelpPage.Entry("-o, --output <output>", "Output file path. Defaults to the input path with .md extension."),
+                HelpPage.Entry("-o, --output <output>", "Output file path, or - for standard output. Defaults to the input path with .md extension, and to standard output when the mail comes from standard input."),
                 HelpPage.Entry("-v, --verbose", "Show detailed information."),
                 HelpPage.Entry("-f, --force", "Overwrite existing output files that differ from the generated Markdown."),
                 HelpPage.Entry("--extract-attachments", "Write attachment files (next to the output, or into --attachments-dir) and link them from the note."),
-                HelpPage.Entry("--attachments-dir <attachments-dir>", "Directory for extracted attachments; implies --extract-attachments. Defaults next to the output."),
+                HelpPage.Entry("--attachments-dir <attachments-dir>", "Directory for extracted attachments; implies --extract-attachments. Defaults next to the output, and is needed when the output is standard output."),
                 HelpPage.Entry("--attachment-name <attachment-name>", "Rename extracted attachments after a pattern, e.g. \"{date} {time} ENCL {name}\"; placeholders are {name}, {ext}, {date} and {time}, the latter two with an optional format ({date:yyyy.MM.dd}). Implies --extract-attachments."),
                 HelpPage.Entry("--inline-images", "Write the pictures the mail shows from its own parts (cid:) as files too, and embed each where it stands. Implies --extract-attachments."),
                 HelpPage.Entry("--version", "Show the version."),
@@ -402,9 +520,9 @@ enum MessageStream {
 /// Prints `message` when `condition` holds.
 ///
 /// The default stream is stderr, because everything this tool prints is
-/// diagnostics: the actual product is the Markdown file it writes. Keeping
-/// stdout empty means `2>/dev/null` silences the noise and nothing else, and it
-/// leaves the channel free for the planned stdout piping (`cat x.eml | mail2md`).
+/// diagnostics: the actual product is the note. Keeping stdout to the note, the
+/// help and the version means `2>/dev/null` silences the noise and nothing else,
+/// and a note written to stdout (`mail2md - < x.eml`) arrives in a pipe untouched.
 func printIf(_ condition: Bool, _ message: String, to stream: MessageStream = .standardError) {
     guard condition else {
         return

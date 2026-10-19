@@ -7,7 +7,8 @@
 
 import Foundation
 
-/// Writes rendered Markdown to disk without silently discarding existing work.
+/// Writes rendered Markdown to disk without silently discarding existing work,
+/// or to stdout.
 ///
 /// Conversion is idempotent, so re-running on an unchanged mail should be a
 /// no-op; a target that has diverged (hand-edited, or produced from a different
@@ -51,6 +52,15 @@ struct MarkdownWriter {
             written.append(document.url)
         }
         return written
+    }
+
+    /// Writes the Markdown to stdout, byte for byte what a file would hold.
+    ///
+    /// A stream has nothing to compare against: there is no conflict, and
+    /// `force` changes nothing. The acceptance suite pins the bytes, since a
+    /// test in process cannot read its own stdout.
+    func writeToStandardOutput(_ content: String) throws {
+        try FileHandle.standardOutput.write(contentsOf: Data(content.utf8))
     }
 
     /// The current content of `url`, or nil when it does not exist.

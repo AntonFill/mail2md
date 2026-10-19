@@ -217,7 +217,7 @@ struct Mail2mdTests {
         #expect(first.standardError.contains("(written)"))
         // Re-running is a no-op, not an overwrite: the writer compares first.
         #expect(second.standardError.contains("(unchanged)"))
-        // Even --verbose keeps stdout free for the planned piping.
+        // Even --verbose keeps stdout free, so a note written there arrives untouched.
         #expect(second.standardOutput.isEmpty)
     }
 
@@ -245,6 +245,96 @@ struct Mail2mdTests {
 
         #expect(run.exitCode == 0)
         #expect(try command.read("mail.md").hasPrefix("---\ncreated: 2026-06-15T07:41\n"))
+    }
+
+    // MARK: - Pipes
+
+    @Test func readsTheMailFromStandardInputAndLeavesNoFile() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+
+        let run = try command.run(["-"], standardInput: Data(simpleEML.utf8))
+
+        #expect(run.exitCode == 0)
+        #expect(run.standardError.isEmpty)
+        // A filter leaves nothing behind but its output.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: command.workspace.path) == ["streams"])
+
+        // The note is the one a file would hold.
+        let input = try command.write(simpleEML, named: "mail.eml")
+        _ = try command.run([input.path])
+        #expect(try command.read("mail.md") == run.standardOutput)
+    }
+
+    /// The note on stdout is byte for byte the file, and the diagnostics stay
+    /// on stderr, the same lines either way.
+    @Test func writesTheNoteToStandardOutputAsTheFileWouldHoldIt() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(inlineImageEML, named: "profil.eml")
+
+        let file = try command.run([input.path])
+        let piped = try command.run(["-o", "-", input.path])
+
+        #expect(piped.exitCode == 0)
+        #expect(try command.read("profil.md") == piped.standardOutput)
+        #expect(piped.standardError == file.standardError)
+        #expect(piped.standardError.isEmpty == false)
+    }
+
+    @Test func writesAMailFromStandardInputToTheFileItIsGiven() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+
+        let run = try command.run(["-", "-o", "note.md"], standardInput: Data(simpleEML.utf8))
+
+        #expect(run.exitCode == 0)
+        #expect(run.standardOutput.isEmpty)
+        #expect(try command.read("note.md").hasPrefix("---\ncreated: 2026-06-15T07:41\n"))
+    }
+
+    /// Nothing on stdin is an empty mail, as an empty file is: the note with its
+    /// keys and nothing in them, and the warning about the date, which names
+    /// stdin the way messages name it.
+    @Test func takesNothingOnStandardInputAsAnEmptyMail() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write("", named: "empty.eml")
+
+        let file = try command.run([input.path])
+        let piped = try command.run(["-"])
+
+        #expect(piped.exitCode == 0)
+        #expect(try command.read("empty.md") == piped.standardOutput)
+        #expect(piped.standardError == "mail2md: (standard input): missing or unparsable Date header (created left empty)\n")
+        #expect(file.standardError == "mail2md: \(input.path): missing or unparsable Date header (created left empty)\n")
+    }
+
+    @Test func refusesAttachmentsOnStandardOutputWithoutADirectory() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(inlineDocumentEML, named: "gesuch.eml")
+
+        let run = try command.run(["-o", "-", "--extract-attachments", input.path])
+
+        // The working directory would be a guess, so the line is refused
+        // before anything is read.
+        #expect(run.exitCode == 64)
+        #expect(run.standardOutput.isEmpty)
+        #expect(run.standardError.hasPrefix("mail2md: attachments need --attachments-dir when the note goes to standard output\n"))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: command.workspace.path).sorted() == ["gesuch.eml", "streams"])
+    }
+
+    @Test func writesAttachmentsIntoTheGivenDirectoryWhenTheNoteGoesToStandardOutput() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let files = command.path("files")
+
+        let run = try command.run(["-", "--attachments-dir", files.path], standardInput: Data(inlineDocumentEML.utf8))
+
+        #expect(run.exitCode == 0)
+        #expect(run.standardOutput.hasSuffix("\n[[Ausweis.pdf]]\n"))
+        #expect(command.exists("files/Ausweis.pdf"))
     }
 
     // MARK: - Failing
@@ -489,6 +579,40 @@ struct InvocationTests {
 
     @Test func reachesAPathThatStartsWithADashAfterADoubleDash() throws {
         #expect(try Mail2md.invocation(from: ["--", "-mail.eml"]) == .run(Mail2md(path: "-mail.eml")))
+    }
+
+    @Test func readsADashAsStandardInputAndWritesTheNoteToStandardOutput() throws {
+        let command = Mail2md(path: "-")
+
+        #expect(try Mail2md.invocation(from: ["-"]) == .run(command))
+        #expect(command.readsStandardInput)
+        #expect(command.inputName == "(standard input)")
+        #expect(command.destination == .standardOutput)
+        // A file that --output names still takes the note.
+        #expect(Mail2md(output: "note.md", path: "-").destination == .file("note.md"))
+    }
+
+    @Test func writesTheNoteToStandardOutputForADashAsOutput() throws {
+        #expect(try Mail2md.invocation(from: ["mail.eml", "-o", "-"]) == .run(Mail2md(output: "-", path: "mail.eml")))
+        // Until 1.4.0, `-o -` wrote a file named `-`.
+        #expect(Mail2md(output: "-", path: "mail.eml").destination == .standardOutput)
+        #expect(Mail2md(path: "/mail/Anfrage.eml").destination == .file("/mail/Anfrage.md"))
+    }
+
+    @Test(arguments: [
+        ["-", "--extract-attachments"],
+        ["mail.eml", "-o", "-", "--inline-images"],
+        ["-", "--attachment-name", "ENCL {name}"],
+    ])
+    func refusesAttachmentsWithoutADirectoryForANoteOnStandardOutput(arguments: [String]) throws {
+        #expect(throws: Mail2md.UsageError(description: Mail2md.attachmentsNeedDirectory)) {
+            try Mail2md.invocation(from: arguments)
+        }
+    }
+
+    @Test func takesAttachmentsAlongWhereTheyHaveADirectory() throws {
+        #expect(try Mail2md.invocation(from: ["-", "--attachments-dir", "files"]) == .run(Mail2md(attachmentsDir: "files", path: "-")))
+        #expect(try Mail2md.invocation(from: ["-", "-o", "note.md", "--extract-attachments"]) == .run(Mail2md(output: "note.md", extractAttachments: true, path: "-")))
     }
 
     @Test func needsNoPathForHelpOrTheVersion() throws {

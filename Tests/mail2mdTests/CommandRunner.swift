@@ -75,14 +75,22 @@ extension CommandRunner {
     /// `environment` sets variables on top of that, and a `nil` value removes one,
     /// so a test can state `COLUMNS` instead of inheriting whatever the
     /// developer's shell exports.
-    func run(_ arguments: [String], environment overrides: [String: String?] = [:]) throws -> Invocation {
+    ///
+    /// `standardInput` is what the command reads on stdin, from a file for the
+    /// same reason the streams go into files. Without it stdin is empty, and
+    /// never the test runner's own: run by an agent, that can be a socket that
+    /// never ends, and a command reading it would hang the suite.
+    func run(_ arguments: [String], standardInput: Data = Data(), environment overrides: [String: String?] = [:]) throws -> Invocation {
         let streams = self.workspace.appendingPathComponent("streams")
         try FileManager.default.createDirectory(at: streams, withIntermediateDirectories: true)
+        let inputURL = streams.appendingPathComponent("stdin.eml")
         let outputURL = streams.appendingPathComponent("stdout.log")
         let errorURL = streams.appendingPathComponent("stderr.log")
+        try standardInput.write(to: inputURL)
         try Data().write(to: outputURL)
         try Data().write(to: errorURL)
 
+        let inputHandle = try FileHandle(forReadingFrom: inputURL)
         let outputHandle = try FileHandle(forWritingTo: outputURL)
         let errorHandle = try FileHandle(forWritingTo: errorURL)
 
@@ -90,6 +98,7 @@ extension CommandRunner {
         process.executableURL = try self.binaryURL()
         process.arguments = arguments
         process.currentDirectoryURL = self.workspace
+        process.standardInput = inputHandle
         process.standardOutput = outputHandle
         process.standardError = errorHandle
 
@@ -102,6 +111,7 @@ extension CommandRunner {
 
         try process.run()
         process.waitUntilExit()
+        try inputHandle.close()
         try outputHandle.close()
         try errorHandle.close()
 

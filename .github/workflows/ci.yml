@@ -69,8 +69,11 @@ jobs:
         run: swift build -c release
 
       - name: Convert a mail with the binary
-        # The formula's own check, so the binary is shown to run, not only to link.
+        # The formula's own check, so the binary is shown to run, not only to link,
+        # once into a file and once from stdin to stdout.
         run: |
           printf 'From: Jane Doe <jane@example.com>\nSubject: Oldest Xcode\nDate: Sun, 15 Jun 2026 09:41:00 +0000\nContent-Type: text/plain; charset=utf-8\n\nHello.\n' > oldest.eml
           .build/release/mail2md oldest.eml
           grep -q 'subject: "Oldest Xcode"' oldest.md
+          .build/release/mail2md - < oldest.eml > piped.md
+          cmp oldest.md piped.md

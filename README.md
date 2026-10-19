@@ -17,6 +17,8 @@ mail2md Mail.eml --attachments-dir ./att # write attachments into ./att (implies
 mail2md Mail.eml --attachment-name "{date} {time} ENCL {name}"   # rename them as they are written
 mail2md Mail.eml --inline-images         # also write the pictures the mail shows and embed them in place
 mail2md Mail.eml --verbose               # report what was parsed and written
+mail2md Mail.eml -o -                    # write the note to stdout instead of a file
+cat Mail.eml | mail2md -                 # read the mail from stdin, write the note to stdout
 mail2md --version
 mail2md --help
 ```
@@ -109,6 +111,20 @@ The alt text becomes the embed's alias where it says something about the picture
 
 A picture Apple Mail places in the middle of a message arrives as a part of its own, between two pieces of text. That one counts as an attachment, listed and extracted like a document placed there.
 
+## Pipes
+
+`-` as the path reads the mail from stdin, and the note then goes to stdout. `-o -` sends it there for a mail read from a file too, so a script or an agent can read a mail as Markdown without a file being left behind.
+
+```sh
+cat Mail.eml | mail2md - > Note.md
+mail2md Mail.eml -o - | less
+mail2md - -o Note.md < Mail.eml          # from stdin into a file
+```
+
+Only the dash reads stdin. A missing path is an error even when stdin is not a terminal, because a program run by an agent or an editor can be handed a stdin that never ends, and the tool would wait there instead of saying what is missing.
+
+The note on stdout is byte for byte the file mail2md would write, and stdout carries nothing else: the warnings and `--verbose` stay on stderr, where messages name the input `(standard input)`. A stream has nothing to compare against, so there is no conflict check and `--force` changes nothing. Attachments need a place of their own, since a note on stdout is written into no directory they could go next to: with `--extract-attachments`, `--attachment-name` or `--inline-images`, pass `--attachments-dir` too, or the command line is refused.
+
 ## How it compares
 
 **The Obsidian plugins mostly view rather than convert.** MSG Handler, EML Email Viewer, Email Reader and Embed EML render the mail inside Obsidian, but the file stays an `.eml`. It never becomes a note, and one of them states outright that its content does not reach Obsidian's global search.
@@ -135,13 +151,13 @@ A named document that Apple Mail dispositions as `inline` rather than `attachmen
 
 Bodies pass through a lossless cleanup: angle-bracket duplicates of mail and web addresses are collapsed onto their plain twin, `cid:` image references are dropped, as are two things a mail system writes in rather than the sender (the banner Exchange puts above mail from a new sender, "You don't often get email from …", and a link around a quoted picture's file name, such as a social icon in an old signature), and runs of blank lines are normalised. Quote depth (`>`) is never touched, so the structure the mail carried survives.
 
-All diagnostics, including `--verbose` progress, go to stderr. The product is the Markdown file, so stdout carries only genuine data (today just `--version`) and `2>/dev/null` silences the tool without hiding anything else.
+All diagnostics, including `--verbose` progress, go to stderr. The product is the note, so stdout carries only data, the note when it is asked for there, the help and the version, and `2>/dev/null` silences the tool without hiding anything else.
 
 A mail file that is not UTF-8, as old mail in Latin-1 often is, is read in the charsets it declares, each part in its own. Text labelled ISO-8859-1 or US-ASCII is read as Windows-1252, which is what the WHATWG Encoding Standard makes of those labels, so the curly quotes, dashes and euro sign that many mailers send under them come through as characters, not as invisible control codes.
 
 An input that cannot be converted exits 1 and says why in Unix form, `mail2md: <path>: <message>`: a missing file, a directory, a file that cannot be read, or one whose bytes are neither valid UTF-8 nor in a charset the file declares. Nothing is written in those cases, so the tool is safe to use in a pipeline that checks the exit code. A note or an attachment that cannot be written is reported the same way. A command line the tool cannot use, such as an unknown option or a missing path, exits 64, the code `sysexits(3)` gives a usage error, with the usage on stderr and before any file is read.
 
-JSON/text output and stdin/stdout piping are on the roadmap.
+JSON and plain-text output are on the roadmap.
 
 ## Install
 
