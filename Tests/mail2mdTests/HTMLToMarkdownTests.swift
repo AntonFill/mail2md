@@ -566,6 +566,25 @@ struct BlockLayoutTests {
 
         #expect(HTMLToMarkdown.convert(html) == "[www.example.c](https://www.example.ch/)[om](https://www.example.com)")
     }
+
+    /// A line of text that opens with three tildes or backticks would open a
+    /// code fence, in a quote and in a list item too, and turn what follows
+    /// into code; its first character is escaped. SuccessFactors writes such
+    /// a line above every reply it asks for (2 of 648 archive mails,
+    /// 2026-10-26). A fence the emitter writes for `pre`, a run inside a line
+    /// and the text of inline code stay as they are.
+    @Test(arguments: [
+        ("<div>~~~~~ <b>Important:</b> Please reply above this line ~~~~~<br>Thank you.</div><p>Rest</p>", "\\~~~~~ **Important:** Please reply above this line ~~~~~\nThank you.\n\nRest"),
+        ("<blockquote><div>~~~~~ <b>Important:</b> ~~~~~</div><div>Text</div></blockquote>", "> \\~~~~~ **Important:** ~~~~~\n> Text"),
+        ("<ul><li>~~~ Punkt</li></ul>", "- \\~~~ Punkt"),
+        ("<p>```js</p>", "\\```js"),
+        ("<p>Ein ~~~ in der Zeile</p>", "Ein ~~~ in der Zeile"),
+        ("<pre>code</pre>", "```\ncode\n```"),
+        ("<p><code>```x</code></p>", "`` ```x ``"),
+    ])
+    func escapesALineThatWouldOpenACodeFence(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
 }
 
 // MARK: -

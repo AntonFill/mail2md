@@ -1213,7 +1213,12 @@ extension HTMLToMarkdown {
     }
 
     fileprivate static func inlineCode(_ element: Element, into layout: inout Layout) {
-        let content = self.content(of: element)
+        // Code shows a backslash, and the delimiters around it keep it from
+        // opening a fence.
+        var inner = Layout()
+        inner.escapesFences = false
+        self.renderChildren(of: element, into: &inner)
+        let content = inner.content
         let delimiter = content.flattened.contains("`") ? "``" : "`"
 
         layout.place(content.onOneLine) { line in
@@ -2204,6 +2209,10 @@ fileprivate struct Layout {
 
     private(set) var operations: [Operation] = []
 
+    /// Whether a line of text that would open a code fence is escaped
+    /// (`asText`). Off for the text of inline code, which shows a backslash.
+    var escapesFences = true
+
     private var lines: [String] = []
     private var current = ""
 
@@ -2228,7 +2237,7 @@ fileprivate struct Layout {
     var markdown: String {
         var lines = self.lines
         if self.occupied {
-            lines.append(self.current.trimmingSpaces)
+            lines.append(self.asText(self.current.trimmingSpaces))
         }
         while lines.first?.isEmpty == true {
             lines.removeFirst()
@@ -2242,7 +2251,7 @@ fileprivate struct Layout {
     var content: Content {
         var lines = self.lines
         if self.occupied || self.brokeLine {
-            lines.append(self.current.trimmingSpaces)
+            lines.append(self.asText(self.current.trimmingSpaces))
         }
 
         return Content(
@@ -2491,12 +2500,28 @@ fileprivate struct Layout {
     /// Moves the current line into the finished ones. One blank line is all
     /// Markdown shows, so an empty line after an empty line is dropped.
     private mutating func commit() {
-        let line = self.current.trimmingSpaces
+        let line = self.asText(self.current.trimmingSpaces)
         if line.isEmpty == false || self.lines.last?.isEmpty != true {
             self.lines.append(line)
         }
         self.current = ""
         self.occupied = false
+    }
+
+    /// A line of text as Markdown has to read it. One that opens with three
+    /// backticks or tildes would open a code fence, and all that follows it
+    /// would be code, so its first character is escaped: SuccessFactors
+    /// writes `~~~~~ Important: …` above every reply it asks for (2 of 648
+    /// archive mails, 2026-10-26). Code the emitter fences itself goes in as
+    /// lines of its own and never passes here.
+    private func asText(_ line: String) -> String {
+        guard
+            self.escapesFences,
+            line.hasPrefix("```") || line.hasPrefix("~~~")
+        else {
+            return line
+        }
+        return "\\" + line
     }
 }
 
