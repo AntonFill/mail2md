@@ -70,14 +70,46 @@ struct AttachmentExtractionTests {
             .extract(EMLParser().attachmentParts(from: punctuationNameEML))
 
         // A URL parser would cut at the `#` and the `?` and decode the `%20`,
-        // leaving files without their extension.
-        #expect(written.contains("Rechnung #123.pdf"))
+        // leaving files without their extension. The `#` itself becomes `-`,
+        // see the test below.
+        #expect(written.contains("Rechnung -123.pdf"))
         #expect(written.contains("Bericht%20final.pdf"))
         #expect(written.contains("Wann? Jetzt.pdf"))
 
-        for name in ["Rechnung #123.pdf", "Bericht%20final.pdf", "Wann? Jetzt.pdf"] {
+        for name in ["Rechnung -123.pdf", "Bericht%20final.pdf", "Wann? Jetzt.pdf"] {
             #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent(name).path))
         }
+    }
+
+    /// The note links every file it writes, and Obsidian's wikilink reaches no
+    /// file whose name holds `#` or `|`, nor one whose name holds `[[` or `]]`
+    /// or ends in `]` (measured 2026-10-26): `#` makes the rest of the name a
+    /// heading, `|` an alias, the brackets end the link early. Each becomes
+    /// `-`, as a `/` does, and in such a name every bracket; a single bracket
+    /// inside a name links and stays. Until 1.5.0 the note linked a file it
+    /// could not reach.
+    @Test(arguments: [
+        ("Rechnung #123.pdf", "Rechnung -123.pdf"),
+        ("Angebot A|B.pdf", "Angebot A-B.pdf"),
+        ("Scan [[1]].pdf", "Scan --1--.pdf"),
+        ("Scan [1]", "Scan -1-"),
+        ("Rechnung [Kopie].pdf", "Rechnung [Kopie].pdf"),
+        ("Plan ^2: final.pdf", "Plan ^2: final.pdf"),
+    ])
+    func writesANameTheNoteCanLink(name: String, expected: String) {
+        #expect(AttachmentExtractor.linkable(name) == expected)
+    }
+
+    /// The pattern's own text is held to the same rule.
+    @Test func makesThePatternsNameLinkableToo() throws {
+        let dir = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let naming = AttachmentNaming(pattern: "#{name}", date: nil)
+
+        let written = try AttachmentExtractor(directory: dir, naming: naming)
+            .extract(EMLParser().attachmentParts(from: inlineDocumentEML))
+
+        #expect(written == ["-Ausweis.pdf"])
     }
 
     @Test func rejectsDotAsAttachmentName() throws {

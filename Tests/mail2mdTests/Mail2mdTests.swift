@@ -110,6 +110,22 @@ struct Mail2mdTests {
         #expect(try command.read("gesuch.md").hasSuffix("\n[[2026.07.22 09.00 ENCL Ausweis.pdf|Ausweis.pdf]]\n"))
     }
 
+    /// A name Obsidian's link cannot reach is written so that it can, and the
+    /// link keeps the mail's name as its alias.
+    @Test func linksAnAttachmentWhoseNameHoldsAHash() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(punctuationNameEML, named: "rechnungen.eml")
+        let attachments = command.path("files")
+
+        let run = try command.run(["--attachments-dir", attachments.path, input.path])
+
+        #expect(run.exitCode == 0)
+        #expect(command.exists("files/Rechnung -123.pdf"))
+        #expect(try command.read("rechnungen.md").contains("\n[[Rechnung -123.pdf|Rechnung #123.pdf]]\n"))
+        #expect(try command.read("rechnungen.md").contains("  - \"[[Rechnung -123.pdf]]\"\n"))
+    }
+
     /// A typo in the pattern is a command line the tool cannot use, refused
     /// before the mail is read. Until 1.5.0 the run found it and exited 1.
     @Test func rejectsAnUnknownPlaceholderWithoutWritingAnything() throws {

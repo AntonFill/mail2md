@@ -16,7 +16,8 @@ import UniformTypeIdentifiers
 /// collisions between attachments (or with files already present; suffixed
 /// `-1`, `-2`, … so nothing is overwritten). Parts without a usable name fall
 /// back to `unnamed`, with an extension derived from the media type when the
-/// system can map it.
+/// system can map it. And as the note links every file it writes, no name
+/// holds what would break the link (`linkable`).
 ///
 /// A `naming` pattern renames each file as it is written, so a consumer with a
 /// filename schema of its own gets it applied here instead of renaming
@@ -78,11 +79,34 @@ struct AttachmentExtractor {
     }
 
     /// The name a part is written under: its sanitized own name, put through
-    /// the naming pattern when there is one.
+    /// the naming pattern when there is one, in a form the note can link.
     private func targetName(for part: AttachmentPart) -> String {
         let name = self.safeName(for: part)
 
-        return self.naming?.apply(to: name) ?? name
+        return Self.linkable(self.naming?.apply(to: name) ?? name)
+    }
+
+    /// A name the note's link reaches. The note links every file a run writes
+    /// with a wikilink, and in Obsidian a wikilink reaches no file whose name
+    /// holds `#` or `|`, nor one whose name holds `[[` or `]]` or ends in `]`
+    /// (measured 2026-10-26): `#` makes the rest of the name a heading, `|` an
+    /// alias, and the brackets end the link early. For `#` no other form of
+    /// link does either, `%23` stays undecoded. Each becomes `-`, as a `/`
+    /// does in a pattern, and in a name with such brackets every bracket; a
+    /// single bracket inside a name links and stays. The link keeps the mail's
+    /// own name as its alias. Until 1.5.0 the note linked a file it could not
+    /// reach.
+    static func linkable(_ name: String) -> String {
+        let name = name
+            .replacingOccurrences(of: "#", with: "-")
+            .replacingOccurrences(of: "|", with: "-")
+        guard name.contains("[[") || name.contains("]]") || name.hasSuffix("]") else {
+            return name
+        }
+
+        return name
+            .replacingOccurrences(of: "[", with: "-")
+            .replacingOccurrences(of: "]", with: "-")
     }
 
     // MARK: -
