@@ -366,7 +366,7 @@ extension HTMLToMarkdown {
     fileprivate static func setApart(_ card: Layout, lines: [String], title: String, format: OutputFormat, into layout: inout Layout) {
         switch format {
         case .obsidian:
-            let body = lines.dropFirst().map { $0.isEmpty ? ">" : "> " + $0 }
+            let body = self.headingFirstRow(Array(lines.dropFirst())).map { $0.isEmpty ? ">" : "> " + $0 }
             layout.gap(2)
             layout.writeLines(["> [!quote] " + title] + body)
             layout.gap(2)
@@ -379,6 +379,28 @@ extension HTMLToMarkdown {
             layout.rule()
             layout.gap(2)
         }
+    }
+
+    /// A callout's body whose first block is a table under an empty header,
+    /// the one Markdown needs where the mail gives none, with the table's
+    /// first row in the header's place: right under the callout's title the
+    /// empty header shows as an empty first row, and the title heads the
+    /// table already (Anton's decision A, 2026-10-26). Any other body as it is.
+    fileprivate static func headingFirstRow(_ body: [String]) -> [String] {
+        guard
+            let start = body.firstIndex(where: { $0.isEmpty == false }),
+            body.count > start + 2,
+            body[start].wholeMatch(of: /\|( +\|)+/) != nil,
+            body[start + 1].wholeMatch(of: /\|(---\|)+/) != nil
+        else {
+            return body
+        }
+
+        var lines = body
+        let separator = lines.remove(at: start + 1)
+        lines.remove(at: start)
+        lines.insert(separator, at: start + 1)
+        return lines
     }
 
     /// Whether a node shows text a reader sees, more than whitespace.

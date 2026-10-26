@@ -1105,6 +1105,36 @@ struct BoxTests {
         #expect(HTMLToMarkdown.convert(html, format: .obsidian) == "> [!quote] Buchungsdetails\n>\n> Nummer: 1\n\nDanach")
     }
 
+    /// A card whose title is a dark bar above a table of fields, as the
+    /// parking confirmation sets its details.
+    static func fieldCard(_ between: String = "", header: String = "") -> String {
+        return """
+            <div style="border:1px solid #cccccc"><table><tr><th>Buchungsdetails</th></tr></table>\(between)\
+            <table>\(header)<tr><td><b>Nummer:</b></td><td>1</td></tr><tr><td><b>Datum:</b></td><td>01.09.2026</td></tr></table></div><div>Danach</div>
+            """
+    }
+
+    /// Markdown needs a header over a table, and one without header cells
+    /// gets an empty one, which under a callout's title shows as an empty
+    /// first row. The title heads the table already, so its first row takes
+    /// the header's place (Anton's decision A, 2026-10-26).
+    @Test func takesTheFirstRowForTheHeaderOfATableRightUnderTheTitle() {
+        let expected = "> [!quote] Buchungsdetails\n>\n> | **Nummer:** | 1 |\n> |---|---|\n> | **Datum:** | 01.09.2026 |\n\nDanach"
+
+        #expect(HTMLToMarkdown.convert(Self.fieldCard(), format: .obsidian) == expected)
+    }
+
+    /// Only there: a table further down the card, a table with a header of
+    /// its own, and the card between rules keep their header as before.
+    @Test(arguments: [
+        (BoxTests.fieldCard("<div>Stand heute</div>"), OutputFormat.obsidian, "> [!quote] Buchungsdetails\n> Stand heute\n>\n> |  |  |\n> |---|---|\n> | **Nummer:** | 1 |\n> | **Datum:** | 01.09.2026 |\n\nDanach"),
+        (BoxTests.fieldCard(header: "<tr><th>Feld</th><th>Wert</th></tr>"), OutputFormat.obsidian, "> [!quote] Buchungsdetails\n>\n> | Feld | Wert |\n> |---|---|\n> | **Nummer:** | 1 |\n> | **Datum:** | 01.09.2026 |\n\nDanach"),
+        (BoxTests.fieldCard(), OutputFormat.markdown, "---\n\n**Buchungsdetails**\n\n|  |  |\n|---|---|\n| **Nummer:** | 1 |\n| **Datum:** | 01.09.2026 |\n\n---\n\nDanach"),
+    ])
+    func keepsTheHeaderOfEveryOtherTableInACard(html: String, format: OutputFormat, expected: String) {
+        #expect(HTMLToMarkdown.convert(html, format: format) == expected)
+    }
+
     /// Two cards one below the other share the rule between them.
     @Test func drawsOneRuleBetweenTwoCards() {
         let html = """
