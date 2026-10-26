@@ -116,7 +116,7 @@ A picture Apple Mail places in the middle of a message arrives as a part of its 
 
 ## Cards
 
-Some mails set their content apart in boxes: a card per person, a summary under a heading, a banner with a total. A box framed on all four sides or on a colour of its own, more than one line long and headed by a line all in bold, stands in the note between two rules, which any Markdown shows. With `--format obsidian` it becomes a callout instead, its bold line the title:
+Some mails set their content apart in boxes: a card per person, a summary under a heading, a banner with a total. A box framed on all four sides or on a colour of its own, more than one line long and headed by a line all in bold, stands in the note between two rules, which any Markdown shows. With `--format obsidian` it becomes a callout instead, its bold line the title. The links to extracted files are Obsidian's wikilinks in either format:
 
 ```markdown
 > [!quote] Jane Doe

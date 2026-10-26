@@ -9,7 +9,9 @@ import Foundation
 
 /// The Markdown a note is written in. Plain Markdown is read anywhere;
 /// Obsidian's adds syntax only Obsidian shows, a box the mail sets apart
-/// written as a callout rather than between rules.
+/// written as a callout rather than between rules. Either links the files a
+/// run extracts with Obsidian's wikilinks and embeds, which other readers show
+/// as text: the format names the Markdown of the mail's own content.
 enum OutputFormat: String, CaseIterable {
     case markdown
     case obsidian
