@@ -304,8 +304,8 @@ extension HTMLToMarkdown {
             }
             if isBox,
                hasBackground,
-               let ink = self.textColor(in: child, inherited: color),
-               ink.luminance > behind.luminance {
+               let foreground = self.textColor(in: child, inherited: color),
+               foreground.luminance > behind.luminance {
                 try child.attr(self.buttonAttribute, "")
             }
 

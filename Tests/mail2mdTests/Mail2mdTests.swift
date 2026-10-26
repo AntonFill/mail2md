@@ -586,7 +586,7 @@ struct InvocationTests {
 
     /// Plain Markdown unless the line asks for Obsidian's.
     @Test func writesMarkdownUnlessTheFormatSaysOtherwise() throws {
-        #expect(Mail2md(path: "mail.eml").format == .markdown)
+        #expect(try Mail2md.invocation(from: ["mail.eml"]) == .run(Mail2md(format: .markdown, path: "mail.eml")))
         #expect(try Mail2md.invocation(from: ["--format", "markdown", "mail.eml"]) == .run(Mail2md(path: "mail.eml")))
         #expect(try Mail2md.invocation(from: ["--format", "obsidian", "mail.eml"]) == .run(Mail2md(format: .obsidian, path: "mail.eml")))
     }

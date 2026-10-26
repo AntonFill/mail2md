@@ -285,6 +285,17 @@ struct EmphasisTests {
     func setsNoMarkersAroundABlockMarkdownMarks(html: String, expected: String) {
         #expect(HTMLToMarkdown.convert(html) == expected)
     }
+
+    /// A header cell is bold of itself, so a style that sets it bold adds no
+    /// second pair of markers; a heading lays its text out on its own, so
+    /// emphasis inside it keeps its markers, as before.
+    @Test(arguments: [
+        ("<table><tr><th style=\"font-weight:bold\">Buchungsdetails</th></tr></table>", "**Buchungsdetails**"),
+        ("<h2 style=\"font-weight:bold\">Alle <b>Termine</b></h2>", "## Alle **Termine**"),
+    ])
+    func leavesTheBoldOfHeadersAndHeadingsAsItWas(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
 }
 
 // MARK: -
@@ -986,7 +997,7 @@ struct BoxTests {
     @Test(arguments: [
         "style=\"background-color:#4976BA;border-radius:8px\"",
         "style=\"background:#eee\"",
-        "style=\"background: url(https://example.com/banner.png) no-repeat #eeeeee\"",
+        "style=\"background: url(https://example.com/white.png) no-repeat #eeeeee\"",
         "style=\"background-color: rgb(73, 118, 186)\"",
         "style=\"background-color:#4976BA26\"",
         "style=\"background:yellow\"",
@@ -1015,6 +1026,7 @@ struct BoxTests {
         ("<div style=\"border:1px solid #cccccc;border-bottom:none\"><b>Titel</b><div>Text</div></div>", "**Titel**\nText"),
         ("<div style=\"border:0 solid #cccccc\"><b>Titel</b><div>Text</div></div>", "**Titel**\nText"),
         ("<div style=\"border:1px solid #cccccc\"><div>Kopf</div><div style=\"background:#eeeeee\"><b>Innen</b><div>Text</div></div></div>", "Kopf\n**Innen**\nText"),
+        ("<div style=\"border:1px solid #cccccc\"><div><b>Teil</b> und <b>Teil</b></div><div>Text</div></div>", "**Teil** und **Teil**\nText"),
         ("<div>Ein <span style=\"background:#eeeeee\"><b>Titel</b><br>Text</span></div>", "Ein **Titel**\nText"),
     ])
     func leavesWhatIsNoCardAsItWas(box: String, expected: String) {
@@ -1033,10 +1045,23 @@ struct BoxTests {
 
     /// A mail lays its text on a panel of a colour of its own. The panel
     /// holding all of it is the page, and a card on it is a card.
-    @Test func takesThePanelHoldingAllTextForThePage() {
+    @Test(arguments: [
+        "<div style=\"background:#f4f4f4\"><div style=\"background:#ffffff\">%@</div></div>",
+        "<div style=\"background:#ffffff\"><div style=\"background:#f4f4f4\">%@</div></div>",
+    ])
+    func takesThePanelHoldingAllTextForThePage(panels: String) {
+        let card = "<div>Hallo</div><div style=\"border:1px solid #cccccc\"><b>Karte</b><div>Text</div></div><div>Gruss</div>"
+        let html = panels.replacingOccurrences(of: "%@", with: card)
+
+        #expect(HTMLToMarkdown.convert(html, format: .obsidian) == "Hallo\n\n> [!quote] Karte\n> Text\n\nGruss")
+    }
+
+    /// On a page of a colour of its own, a card in the colour around the
+    /// page is a card.
+    @Test func setsACardInAColourOfItsOwnOnAColouredPageApart() {
         let html = """
-            <div style="background:#f4f4f4"><div style="background:#ffffff"><div>Hallo</div>\
-            <div style="border:1px solid #cccccc"><b>Karte</b><div>Text</div></div><div>Gruss</div></div></div>
+            <div style="background:#f4f4f4"><div>Hallo</div>\
+            <div style="background:#ffffff"><b>Karte</b><div>Text</div></div><div>Gruss</div></div>
             """
 
         #expect(HTMLToMarkdown.convert(html, format: .obsidian) == "Hallo\n\n> [!quote] Karte\n> Text\n\nGruss")
@@ -1061,6 +1086,14 @@ struct BoxTests {
         #expect(HTMLToMarkdown.convert(html) == "Davor\n\n---\n\n**Eins**\nText\n\n---\n\n**Zwei**\nText\n\n---\n\nDanach")
     }
 
+    /// A frame alone makes no button, on a dark page with light text either:
+    /// a button sits on a colour of its own.
+    @Test func leavesAFramedLineOnADarkPagePlain() {
+        let html = "<div style=\"background:#333333;color:#ffffff\"><div>Davor</div><div style=\"border:1px solid #ffffff\">Hinweis</div><div>Danach</div></div>"
+
+        #expect(HTMLToMarkdown.convert(html) == "Davor\nHinweis\nDanach")
+    }
+
     /// A box of one line in light text on a dark background of its own is a
     /// button, and a reader sees it at once, so it is bold. A pale bar in dark
     /// text is not, and neither is a button that is a link, which says so
@@ -1072,6 +1105,7 @@ struct BoxTests {
         ("<td style=\"background:#0f4527;color:#fff\">Prämie CHF <b>100</b></td>", "**Prämie CHF 100**"),
         ("<td style=\"background:#E5E5E5\"><div style=\"color:#333333\">Keine Ersparnis</div></td>", "Keine Ersparnis"),
         ("<td style=\"background:#dff8ea\"><div style=\"color:#0f4527\">Ersparnis CHF <span style=\"font-weight:bold\">10.00</span></div></td>", "Ersparnis CHF **10.00**"),
+        ("<td style=\"background:rgba(0, 0, 0, 0.15)\"><div style=\"color:#333333\">Hinweis</div></td>", "Hinweis"),
         ("<td style=\"background:#0f4527\"><a href=\"https://example.com\" style=\"color:#ffffff\">Ansehen</a></td>", "[Ansehen](https://example.com)"),
         ("<td style=\"background:#0f4527;color:#ffffff\"><div>Zeile eins</div><div>Zeile zwei</div></td>", "Zeile eins\nZeile zwei"),
     ])
@@ -1136,6 +1170,7 @@ struct ColumnTests {
         (["49", "49"], ["<div>Eins</div>", "<div>Zwei</div>"], "Eins\nZwei"),
         (["100", "100"], ["<div>Eins</div><div>Zwei</div>", "<div>Drei</div><div>Vier</div>"], "Eins\nZwei\nDrei\nVier"),
         (["60", "60"], ["<div>Eins</div><div>Zwei</div>", "<div>Drei</div><div>Vier</div>"], "Eins\nZwei\nDrei\nVier"),
+        (["49", "49"], ["<div>Eins</div><div>Zwei</div>", "<div>&#8202;</div>"], "Eins\nZwei"),
     ])
     func stacksColumnsThatDoNotPairUp(percents: [String], contents: [String], expected: String) {
         let html = Self.section(zip(percents, contents).map { Self.column($0, $1) })
