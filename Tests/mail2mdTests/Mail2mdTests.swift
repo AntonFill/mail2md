@@ -110,6 +110,8 @@ struct Mail2mdTests {
         #expect(try command.read("gesuch.md").hasSuffix("\n[[2026.07.22 09.00 ENCL Ausweis.pdf|Ausweis.pdf]]\n"))
     }
 
+    /// A typo in the pattern is a command line the tool cannot use, refused
+    /// before the mail is read. Until 1.5.0 the run found it and exited 1.
     @Test func rejectsAnUnknownPlaceholderWithoutWritingAnything() throws {
         let command = try CommandRunner()
         defer { command.removeWorkspace() }
@@ -117,8 +119,8 @@ struct Mail2mdTests {
 
         let run = try command.run(["--attachment-name", "{date} {stem}", input.path])
 
-        #expect(run.exitCode == 1)
-        #expect(run.standardError == "mail2md: {stem}: unknown placeholder in --attachment-name\n")
+        #expect(run.exitCode == 64)
+        #expect(run.standardError == "mail2md: {stem}: unknown placeholder in --attachment-name\n\(Mail2md.usage)\n")
         #expect(command.exists("gesuch.md") == false)
     }
 
@@ -595,6 +597,15 @@ struct InvocationTests {
         #expect(throws: Mail2md.UsageError(description: "--format takes markdown or obsidian, not 'html'")) {
             try Mail2md.invocation(from: ["mail.eml", "--format", "html"])
         }
+    }
+
+    /// Every unknown placeholder is named, in the order of the pattern; a known
+    /// one with a format passes.
+    @Test func refusesAPatternWithAPlaceholderItDoesNotKnow() throws {
+        #expect(throws: Mail2md.UsageError(description: "{stem}, {datum:yyyy}: unknown placeholder in --attachment-name")) {
+            try Mail2md.invocation(from: ["mail.eml", "--attachment-name", "{date:yyyy} {stem} {datum:yyyy}"])
+        }
+        #expect(try Mail2md.invocation(from: ["mail.eml", "--attachment-name", "{date:yyyy} {name}"]) == .run(Mail2md(attachmentName: "{date:yyyy} {name}", path: "mail.eml")))
     }
 
     @Test func takesTheOutputAttachedToItsShortForm() throws {

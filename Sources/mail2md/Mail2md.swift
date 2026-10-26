@@ -286,6 +286,10 @@ struct Mail2md: Equatable {
     /// A pattern that renders the mail's date needs one, and a mail without a
     /// parsable `Date:` header has none. Rather than writing a filename with a
     /// hole in it, the run says so and falls back to the attachments' own names.
+    ///
+    /// `invocation(from:)` refuses a pattern with an unknown placeholder. The
+    /// check stands here as well, so that no command built another way writes
+    /// the typo into a filename.
     private func naming(for date: Date?) throws -> AttachmentNaming? {
         guard let pattern = self.attachmentName else {
             return nil
@@ -293,7 +297,7 @@ struct Mail2md: Equatable {
 
         let unknown = AttachmentNaming.unknownPlaceholders(in: pattern)
         guard unknown.isEmpty else {
-            printIf(true, "mail2md: {\(unknown.joined(separator: "}, {"))}: unknown placeholder in --attachment-name")
+            printIf(true, "mail2md: \(Self.unknownPlaceholders(unknown))")
             throw Failure()
         }
 
@@ -441,7 +445,21 @@ extension Mail2md {
         if command.destination == .standardOutput, command.extractsAttachments, command.attachmentsDir == nil {
             throw UsageError(description: Self.attachmentsNeedDirectory)
         }
+        // A typo in the pattern would end up in a filename. It hangs on the
+        // pattern alone, so it is refused before the mail is read; until 1.5.0
+        // the run found it and exited 1.
+        if let pattern = command.attachmentName {
+            let unknown = AttachmentNaming.unknownPlaceholders(in: pattern)
+            guard unknown.isEmpty else {
+                throw UsageError(description: Self.unknownPlaceholders(unknown))
+            }
+        }
         return .run(command)
+    }
+
+    /// What names the placeholders a pattern holds that do not exist.
+    static func unknownPlaceholders(_ tokens: [String]) -> String {
+        return "{\(tokens.joined(separator: "}, {"))}: unknown placeholder in --attachment-name"
     }
 }
 

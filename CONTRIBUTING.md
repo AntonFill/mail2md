@@ -66,7 +66,7 @@ An option lives in four places, and a new one goes into all of them:
 ### Output and errors
 
 - Error style is Unix: `mail2md: <path>: <message>`.
-- **A command line the tool cannot use is refused in `invocation(from:)`**, by throwing a `UsageError`: the tool's line and the usage go to stderr, the exit code is 64, and nothing has been read yet. Once the run has started, a failure exits 1. (An unknown placeholder in `--attachment-name` is still found in the run and exits 1, as before 1.4.0.)
+- **A command line the tool cannot use is refused in `invocation(from:)`**, by throwing a `UsageError`: the tool's line and the usage go to stderr, the exit code is 64, and nothing has been read yet. That includes an unknown placeholder in `--attachment-name`, which hangs on the pattern alone. Once the run has started, a failure exits 1.
 - **Everything printed goes to stderr.** The product of this tool is the note, not the console text, so stdout carries nothing but the note where it is asked for there (`-o -`, or a mail read from stdin with `-`), the help and the version: `2>/dev/null` then silences the noise and nothing else, and a pipe receives the note untouched.
 - All output goes through `printIf`, including unconditional messages as `printIf(true, …)`. Pass `to: .standardOutput` only for output that is genuinely data.
 
