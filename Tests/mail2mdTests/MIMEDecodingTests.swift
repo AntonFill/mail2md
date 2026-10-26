@@ -195,9 +195,9 @@ struct HeaderParametersTests {
     }
 
     @Test func joinsContinuationsInTheOrderOfTheirNumbers() {
-        let parsed = parseHeaderParameters(#"application/pdf; name*1=pdf; name*0="2021.09.08 Anmeldung (signed).""#)
+        let parsed = parseHeaderParameters(#"application/pdf; name*1=pdf; name*0="2020.05.04 Vertrag (signed).""#)
 
-        #expect(parsed.parameters["name"] == "2021.09.08 Anmeldung (signed).pdf")
+        #expect(parsed.parameters["name"] == "2020.05.04 Vertrag (signed).pdf")
     }
 
     @Test func decodesAnExtendedValueInTheCharsetItNames() {

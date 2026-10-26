@@ -504,9 +504,9 @@ struct AttachmentsTests {
         let names = EMLParser().parse(continuedNamesEML).attachmentNames
 
         #expect(names == [
-            "2026.08.21 Eintrittsformular (Muster; signed am 01.09.2026).pdf",
-            "2021.09.08 Anmeldung Zu\u{0308}rich (signed).pdf",
-            "Urkunde Mu\u{0308}nchen.pdf",
+            "2026.01.12 Anmeldung (Muster; signed am 15.01.2026).pdf",
+            "2020.05.04 Vertrag Zu\u{0308}rich (signed).pdf",
+            "Plan Mu\u{0308}nchen.pdf",
             "Programm fu_r den Herbst.pdf",
         ])
         // The umlaut stays decomposed, the way the mail writes it.

@@ -321,12 +321,12 @@ let punctuationNameEML = """
 /// plain and in the disposition percent-encoded in UTF-8, with a decomposed
 /// umlaut, while the content type's `name` gets an ASCII stand-in or is
 /// continued itself. The first name holds a `;` inside its quotes, which cut
-/// it short until 1.5.0 (an admission form, 2026-10-25).
+/// it short until 1.5.0 (a signed form, 2026-10-25).
 let continuedNamesEML = """
     From: Anton Fillmann <anton@example.com>\r
-    To: Praxis <praxis@example.com>\r
+    To: Büro <buero@example.com>\r
     Subject: Formulare\r
-    Date: Tue, 01 Sep 2026 10:00:00 +0200\r
+    Date: Thu, 15 Jan 2026 10:00:00 +0100\r
     MIME-Version: 1.0\r
     Content-Type: multipart/mixed; boundary="b"\r
     \r
@@ -336,28 +336,28 @@ let continuedNamesEML = """
     Anbei die Formulare.\r
     --b\r
     Content-Disposition: inline;\r
-    \tfilename*0="2026.08.21 Eintrittsformular (Muster; signed am 0";\r
-    \tfilename*1="1.09.2026).pdf"\r
+    \tfilename*0="2026.01.12 Anmeldung (Muster; signed am 1";\r
+    \tfilename*1="5.01.2026).pdf"\r
     Content-Type: application/pdf;\r
-    \tname="2026.08.21 Eintrittsformular (Muster; signed am 01.09.2026).pdf"\r
+    \tname="2026.01.12 Anmeldung (Muster; signed am 15.01.2026).pdf"\r
     Content-Transfer-Encoding: base64\r
     \r
     JVBERi0xLjQK\r
     --b\r
     Content-Type: application/pdf;\r
-    \tname*0="2021.09.08 Anmeldung Zu_rich (signed).";\r
+    \tname*0="2020.05.04 Vertrag Zu_rich (signed).";\r
     \tname*1=pdf\r
     Content-Disposition: attachment;\r
-    \tfilename*0*=utf-8''2021.09.08%20Anmeldung%20Zu%CC%88rich%20%28signed%29;\r
+    \tfilename*0*=utf-8''2020.05.04%20Vertrag%20Zu%CC%88rich%20%28signed%29;\r
     \tfilename*1*=.pdf\r
     Content-Transfer-Encoding: base64\r
     \r
     JVBERi0xLjQK\r
     --b\r
     Content-Type: application/pdf;\r
-    \tname="Urkunde Mu_nchen.pdf"\r
+    \tname="Plan Mu_nchen.pdf"\r
     Content-Disposition: inline;\r
-    \tfilename*=utf-8''Urkunde%20Mu%CC%88nchen.pdf\r
+    \tfilename*=utf-8''Plan%20Mu%CC%88nchen.pdf\r
     Content-Transfer-Encoding: base64\r
     \r
     JVBERi0xLjQK\r

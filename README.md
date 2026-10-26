@@ -134,7 +134,7 @@ Some mails set their content apart in boxes: a card per person, a summary under 
 
 Only the outermost box is a card, never one inside another, and never the box holding the mail's last line, which is its footer. Inside, a one-line box in light text on a dark colour is a button and is set in bold, and columns that MJML sets side by side pair up as a table where each holds as many lines as the others.
 
-`--format obsidian` also escapes a `#` that Obsidian would read as the start of a tag, `\#TeamHolidayCheck`, so that a sender's hashtag or a ticket's code in the text does not turn into a tag of the vault. Code stays as it is.
+`--format obsidian` also escapes a `#` that Obsidian would read as the start of a tag, `\#TeamMuster`, so that a sender's hashtag or a ticket's code in the text does not turn into a tag of the vault. Code stays as it is.
 
 ## Pipes
 

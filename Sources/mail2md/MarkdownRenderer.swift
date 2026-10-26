@@ -259,7 +259,7 @@ extension MarkdownRenderer {
 
     /// The body as Obsidian is to read it: a `#` Obsidian would take for the
     /// start of a tag is escaped, `\#`, as the vault escapes it in quoted
-    /// wording. Senders write hashtags into their mail, `#TeamHolidayCheck`,
+    /// wording. Senders write hashtags into their mail, `#TeamMuster`,
     /// and a ticket system a code, and each became a tag of the vault (9 in 7
     /// of 648 archive mails, 2026-10-26).
     ///

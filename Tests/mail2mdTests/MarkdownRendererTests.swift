@@ -281,7 +281,7 @@ struct FrontmatterContractTests {
 // MARK: -
 
 /// A `#` Obsidian would read as the start of a tag, in `--format obsidian`.
-/// Senders write hashtags into their mail, `#TeamHolidayCheck`, and a ticket
+/// Senders write hashtags into their mail, `#TeamMuster`, and a ticket
 /// system a code, and each became a tag of the vault. Measured in Obsidian on
 /// 2026-10-26: a tag starts at the start of a line, after a space, and right
 /// inside emphasis or a link's text, and runs over letters, digits, `_`, `-`
@@ -291,9 +291,9 @@ struct TagTests {
     static let renderer = MarkdownRenderer(format: .obsidian)
 
     @Test(arguments: [
-        ("#TeamHolidayCheck", "\\#TeamHolidayCheck"),
-        ("**#GelbGrün**", "**\\#GelbGrün**"),
-        ("CorrespondenceCode #deb624$", "CorrespondenceCode \\#deb624$"),
+        ("#TeamMuster", "\\#TeamMuster"),
+        ("**#Grüezi**", "**\\#Grüezi**"),
+        ("Code #ab12cd$", "Code \\#ab12cd$"),
         ("[#imLink](https://example.com)", "[\\#imLink](https://example.com)"),
         ("Farbe #ff0000.", "Farbe \\#ff0000."),
         ("#tag/sub und #mit-strich_unter", "\\#tag/sub und \\#mit-strich_unter"),
@@ -338,13 +338,13 @@ struct TagTests {
     /// Only Obsidian reads a tag there: plain Markdown keeps the `#`, and so
     /// does the frontmatter, in either format.
     @Test func escapesTheBodyOnlyInObsidiansMarkdown() {
-        let message = EMLParser().parse("Subject: #Neu im Team\r\nDate: Mon, 26 Oct 2026 10:00:00 +0100\r\n\r\nGrüsse vom #TeamHolidayCheck\r\n")
+        let message = EMLParser().parse("Subject: #Neu im Team\r\nDate: Mon, 26 Oct 2026 10:00:00 +0100\r\n\r\nGrüsse vom #TeamMuster\r\n")
 
         let markdown = MarkdownRenderer(timeZone: TimeZone(identifier: "UTC")!).render(message)
         let obsidian = MarkdownRenderer(timeZone: TimeZone(identifier: "UTC")!, format: .obsidian).render(message)
 
-        #expect(markdown.contains("\nGrüsse vom #TeamHolidayCheck\n"))
-        #expect(obsidian.contains("\nGrüsse vom \\#TeamHolidayCheck\n"))
+        #expect(markdown.contains("\nGrüsse vom #TeamMuster\n"))
+        #expect(obsidian.contains("\nGrüsse vom \\#TeamMuster\n"))
         #expect(obsidian.contains("subject: \"#Neu im Team\"\n"))
     }
 }

@@ -184,8 +184,8 @@ struct Mail2mdTests {
         let markdown = try command.run(["-o", "-", input.path])
         let obsidian = try command.run(["--format", "obsidian", "-o", "-", input.path])
 
-        #expect(markdown.standardOutput.hasSuffix("\nGrüsse vom #TeamHolidayCheck\n"))
-        #expect(obsidian.standardOutput.hasSuffix("\nGrüsse vom \\#TeamHolidayCheck\n"))
+        #expect(markdown.standardOutput.hasSuffix("\nGrüsse vom #TeamMuster\n"))
+        #expect(obsidian.standardOutput.hasSuffix("\nGrüsse vom \\#TeamMuster\n"))
     }
 
     // MARK: - Inline images
@@ -768,7 +768,7 @@ private let hashtagEML = """
     Date: Mon, 26 Oct 2026 10:00:00 +0100\r
     Content-Type: text/plain; charset=utf-8\r
     \r
-    Grüsse vom #TeamHolidayCheck\r
+    Grüsse vom #TeamMuster\r
     """
 
 /// A `Date` header no parser can read, for the warning path of the command.
