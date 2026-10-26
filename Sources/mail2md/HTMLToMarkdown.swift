@@ -582,6 +582,10 @@ extension HTMLToMarkdown {
         guard self.isHidden(element) == false else {
             return
         }
+        guard self.isSpacer(element) == false else {
+            layout.gap(2)
+            return
+        }
 
         // What an inline element's own style puts around it, see `frame(of:)`.
         let frame = self.frame(of: element)
@@ -678,6 +682,40 @@ extension HTMLToMarkdown {
 
 // MARK: - Blocks
 extension HTMLToMarkdown {
+
+    /// Whether a block is a spacer: it holds nothing a reader sees, no text
+    /// and no picture, and its style or its attribute sets a height from 3pt
+    /// up. MJML spaces its sections that way, with a hair space in an empty
+    /// `div`, and table layouts with an empty cell or row; a browser shows the
+    /// space, a blank line here (447 such blocks in 66 of 647 archive mails,
+    /// 2026-10-26, 250 of them holding a no-break space that made the line
+    /// already). The word is looked for before the style is read, because
+    /// every element passes here.
+    fileprivate static func isSpacer(_ element: Element) -> Bool {
+        let style = (try? element.attr("style")) ?? ""
+        guard
+            self.blockTags.contains(element.tagName()),
+            style.contains("height") || element.hasAttr("height")
+        else {
+            return false
+        }
+
+        let declared = self.declarations(of: element)["height"] ?? ((try? element.attr("height")) ?? "")
+        guard
+            let height = self.points(declared),
+            height >= 3
+        else {
+            return false
+        }
+        return self.showsText(element) == false && self.holdsPicture(element) == false
+    }
+
+    /// Whether a picture stands anywhere inside the element.
+    fileprivate static func holdsPicture(_ element: Element) -> Bool {
+        return element.children().array().contains { child in
+            return child.tagName() == "img" || self.holdsPicture(child)
+        }
+    }
 
     fileprivate static func block(_ element: Element, into layout: inout Layout) {
         let spacing = self.spacing(of: element)

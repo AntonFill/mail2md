@@ -402,6 +402,36 @@ struct BlockLayoutTests {
         #expect(HTMLToMarkdown.convert(html) == "Vorher\n\n- Punkt\n\nDazwischen\n\n> Zitat\n\nDanach\n\n---\n\nEnde")
     }
 
+    /// MJML spaces its sections with an empty `div` of a set height holding
+    /// a hair space, table layouts with an empty cell or row of a set height,
+    /// and a browser shows the space.
+    @Test(arguments: [
+        "<div style=\"height:20px;line-height:20px;\">&#8202;</div>",
+        "<table role=\"presentation\"><tr><td height=\"20\"></td></tr></table>",
+        "<table role=\"presentation\"><tr height=\"16\"><td></td></tr></table>",
+        "<div style=\"height:1em\"><div></div></div>",
+    ])
+    func readsAnEmptyBlockOfAHeightAsABlankLine(spacer: String) {
+        #expect(HTMLToMarkdown.convert("<div>Eins</div>\(spacer)<div>Zwei</div>") == "Eins\n\nZwei")
+    }
+
+    /// Below 3pt a reader sees a hairline, not a gap; a block holding text or
+    /// a picture is no spacer, and neither is an inline element.
+    @Test(arguments: [
+        "<div style=\"height:2px\"></div>",
+        "<div style=\"line-height:20px\"></div>",
+        "<div style=\"height:auto\"></div>",
+        "<div style=\"height:40px\">Mitte</div>",
+        "<table role=\"presentation\"><tr><td height=\"60\"><img src=\"https://example.com/logo.png\"></td></tr></table>",
+        "<table role=\"presentation\"><tr><td height=\"60\"><a href=\"https://example.com\"><img src=\"https://example.com/logo.png\"></a></td></tr></table>",
+        "<span style=\"height:20px\"></span>",
+    ])
+    func leavesOtherBlocksOfAHeightWithoutSpace(element: String) {
+        let expected = element.contains("Mitte") ? "Eins\nMitte\nZwei" : "Eins\nZwei"
+
+        #expect(HTMLToMarkdown.convert("<div>Eins</div>\(element)<div>Zwei</div>") == expected)
+    }
+
     /// A list its style shows without bullets is a stack of lines to a
     /// reader, spaced as its style spaces it.
     @Test(arguments: ["list-style:none", "list-style-type: none", "list-style: none outside"])
@@ -1543,6 +1573,7 @@ struct SenderStackTests {
 
             **Umweltabgabe**
             Die Umweltabgabe von **CHF 4.75** ist abgezogen.
+
             *Alternativ mit Ihrem persönlichen Code abrufen.*
 
             Freundliche Grüsse
