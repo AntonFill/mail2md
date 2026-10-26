@@ -75,9 +75,6 @@ extension BodyCleaner {
         // A URL immediately followed by its own angle-wrapped duplicate.
         text = text.replacing(/(https?:\/\/[^\s<>]+)<\1>/) { $0.1 }
 
-        // Inline `cid:` image references (footer logos, tracking artifacts).
-        text = text.replacing(/[\[<]cid:[^\]>]*[\]>]/, with: "")
-
         // Trailing whitespace per line, then collapse blank-line runs to one.
         // A line that held nothing but ballast goes as a whole, and with it
         // one of the blank lines around it, as a browser collapses the margins
@@ -129,6 +126,12 @@ extension BodyCleaner {
     /// The line without what a mail system wrote into it rather than the
     /// sender, behind a marker that never varies.
     ///
+    /// A `cid:` reference goes, `[cid:image001.png@01DA…]` or `<cid:…>`: the
+    /// stand-in a mail program writes into the plain form for a picture of the
+    /// HTML form, a logo in a signature or a tracking pixel. A line that held
+    /// nothing else goes with it; until 1.5.0 the reference was taken from the
+    /// whole text before the lines were looked at, and its empty line stayed.
+    ///
     /// Exchange's first-contact banner takes the whole line: a sentence in
     /// the reader's language ending with a link to Microsoft's page on sender
     /// identification, which is the marker (8 of 716 archive mails, 2026-10-03).
@@ -147,7 +150,13 @@ extension BodyCleaner {
     /// (measured 2026-10-04). The line comes in without trailing whitespace,
     /// which `tidy` strips only from a line that ends in some, for the same
     /// reason.
-    fileprivate static func removingBallast(from line: String) -> String {
+    fileprivate static func removingBallast(from text: String) -> String {
+        var line = text
+        if line.contains("cid:") {
+            line = line
+                .replacing(/[\[<]cid:[^\]>\n]*[\]>]/, with: "")
+                .replacing(/[ \t]+$/, with: "")
+        }
         if line.range(of: "aka.ms/LearnAboutSenderIdentification", options: .caseInsensitive) != nil {
             let senderIdentification = /(?:\]\(|<)https:\/\/aka\.ms\/LearnAboutSenderIdentification\/?(?:\)|>)$/.ignoresCase()
             guard line.contains(senderIdentification) == false else {

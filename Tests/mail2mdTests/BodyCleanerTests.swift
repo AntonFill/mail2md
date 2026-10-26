@@ -76,6 +76,20 @@ struct BodyCleanerTests {
         #expect(BodyCleaner.clean(input) == "Grüsse\n\nAndré")
     }
 
+    /// A line that held nothing but `cid:` references goes as a whole, with
+    /// one of the blank lines around it, as the banner does. Until 1.5.0 its
+    /// empty line stayed: a paragraph break the mail never had, in a quote
+    /// three empty lines.
+    @Test func removesALineOfCIDReferencesWithOneOfItsBlankLines() {
+        #expect(BodyCleaner.clean("Grüsse\n[cid:image001.png@01DA326F.669C02F0]\nJana Muster") == "Grüsse\nJana Muster")
+        #expect(BodyCleaner.clean("> Grüsse\n>\n> [cid:image001.png@01DA326F.669C02F0]\n>\n> Jana Muster") == "> Grüsse\n>\n> Jana Muster")
+        #expect(BodyCleaner.clean("> Grüsse\n> <cid:logo> [cid:banner]  \n> Jana Muster") == "> Grüsse\n> Jana Muster")
+    }
+
+    @Test func keepsTheTextBesideACIDReference() {
+        #expect(BodyCleaner.clean("> Jana Muster [cid:logo001.png]\n> Beraterin") == "> Jana Muster\n> Beraterin")
+    }
+
     @Test func removesExchangesFirstContactBanner() {
         // Exchange writes it into the mail it receives; the sender never did.
         let input = """
