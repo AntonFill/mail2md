@@ -34,10 +34,30 @@ struct MarkdownWriter {
     }
 
     /// Writes all documents, skipping any whose content is already identical.
-    /// Returns the URLs actually written. Throws `Conflict` (before writing
-    /// anything) when a target differs and `force` is off.
+    /// Returns the URLs actually written. Throws what `check` finds before
+    /// writing anything, `Conflict` when a target differs and `force` is off.
     @discardableResult
     func writeAll(_ documents: [Document]) throws -> [URL] {
+        try self.check(documents)
+
+        var written: [URL] = []
+        for document in documents where self.existingContent(at: document.url) != document.content {
+            try document.content.write(to: document.url, atomically: true, encoding: .utf8)
+            written.append(document.url)
+        }
+        return written
+    }
+
+    /// Throws what writing the documents would run into, without writing any:
+    /// `Conflict` for a target that differs, unless `force` is set, and the
+    /// error of a folder that takes no file, one that is missing or that may
+    /// not be written to. A target that holds its content already needs no
+    /// write and passes.
+    ///
+    /// A run that writes files besides the note, the attachments it links,
+    /// checks the note first, so that what would stop the note stops the run
+    /// before anything lands on disk.
+    func check(_ documents: [Document]) throws {
         if self.force == false {
             for document in documents {
                 if let existing = self.existingContent(at: document.url), existing != document.content {
@@ -46,12 +66,21 @@ struct MarkdownWriter {
             }
         }
 
-        var written: [URL] = []
+        // A file is written to a temporary name beside it and moved into
+        // place, so what it takes is a folder that can be written to.
         for document in documents where self.existingContent(at: document.url) != document.content {
-            try document.content.write(to: document.url, atomically: true, encoding: .utf8)
-            written.append(document.url)
+            let folder = document.url.deletingLastPathComponent().path
+            var isDirectory: ObjCBool = false
+            guard
+                FileManager.default.fileExists(atPath: folder, isDirectory: &isDirectory),
+                isDirectory.boolValue
+            else {
+                throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: document.url.path])
+            }
+            guard FileManager.default.isWritableFile(atPath: folder) else {
+                throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: document.url.path])
+            }
         }
-        return written
     }
 
     /// Writes the Markdown to stdout, byte for byte what a file would hold.

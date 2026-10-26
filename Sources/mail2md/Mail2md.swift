@@ -27,9 +27,9 @@ struct Mail2md: Equatable {
 
     /// A planned extraction: which parts go where, and under which names.
     ///
-    /// Planned rather than performed, because the note has to link the files by
-    /// the names they will carry while still being written first: a conflicting
-    /// note aborts the run, and it must do so before anything lands on disk.
+    /// Planned rather than performed, because the note links the files by the
+    /// names they will carry, and what would stop the note, a conflict above
+    /// all, has to stop the run before anything lands on disk.
     private struct Extraction {
         let parts: [AttachmentPart]
         let extractor: AttachmentExtractor
@@ -54,12 +54,12 @@ struct Mail2md: Equatable {
             printIf(true, "mail2md: \(self.inputName): missing or unparsable Date header (created left empty)")
         }
 
-        // Extraction is only planned here. The note is written first, so a
-        // conflict aborts before any attachment file exists, but it already
-        // links the attachments by the names the plan gives them. A picture
-        // the body shows is embedded under the name of its file, and the first
-        // reading is what says which pictures it shows, so the body is read
-        // once more with those names.
+        // Extraction is only planned here: the note links the attachments by
+        // the names the plan gives them, and what would stop the note has to
+        // stop the run before any attachment file exists. A picture the body
+        // shows is embedded under the name of its file, and the first reading
+        // is what says which pictures it shows, so the body is read once more
+        // with those names.
         let extraction = try self.planExtraction(from: raw, parser: parser, message: reading)
         let imageNames = extraction?.imageNames ?? [:]
         let message = imageNames.isEmpty ? reading : EMLParser(source: parser.source, imageNames: imageNames, format: self.format).parse(raw)
@@ -82,8 +82,13 @@ struct Mail2md: Equatable {
         // stays in that single file (as the mail itself keeps it); the semantic
         // per-message split is the consumer's job, not this stateless converter's.
         let renderer = MarkdownRenderer(linksAttachments: extraction != nil)
-        try self.write(renderer.render(noted))
+        let note = renderer.render(noted)
 
+        // The note links the attachments, so it is written once they exist:
+        // until 1.5.0 it was written first and linked files that a failing
+        // write then never wrote. What would stop the note, a file that holds
+        // something else or a folder that takes none, is checked before.
+        try self.check(note)
         if let extraction {
             do {
                 let written = try extraction.extractor.extract(extraction.parts)
@@ -93,6 +98,21 @@ struct Mail2md: Equatable {
                 self.reportWriteFailure(at: extraction.extractor.directory.path, error)
                 throw Failure()
             }
+        }
+        try self.write(note)
+    }
+
+    /// Stops the run where the note could not be written into its file, before
+    /// anything is written (`MarkdownWriter.check`). A note on stdout has no
+    /// file to check.
+    private func check(_ content: String) throws {
+        guard case .file(let outputPath) = self.destination else {
+            return
+        }
+
+        let document = MarkdownWriter.Document(url: URL(fileURLWithPath: outputPath), content: content)
+        try self.reportingFailure(of: document) {
+            try MarkdownWriter(force: self.force).check([document])
         }
     }
 
@@ -104,20 +124,9 @@ struct Mail2md: Equatable {
         switch self.destination {
         case .file(let outputPath):
             let document = MarkdownWriter.Document(url: URL(fileURLWithPath: outputPath), content: content)
-
-            do {
+            try self.reportingFailure(of: document) {
                 let written = try writer.writeAll([document])
                 printIf(self.verbose, "mail2md: \(self.inputName) → \(outputPath) (\(written.isEmpty ? "unchanged" : "written"))")
-            }
-            catch let conflict as MarkdownWriter.Conflict {
-                printIf(true, "mail2md: \(conflict.path): differs from generated output (use --force to overwrite)")
-                throw Failure()
-            }
-            catch {
-                // Named the way the conflict above names it, so one file is not
-                // reported under two paths.
-                self.reportWriteFailure(at: document.url.path, error)
-                throw Failure()
             }
         case .standardOutput:
             do {
@@ -128,6 +137,24 @@ struct Mail2md: Equatable {
                 self.reportWriteFailure(at: "(standard output)", error)
                 throw Failure()
             }
+        }
+    }
+
+    /// Runs `body` on the note's file, reporting a conflict or a failure to
+    /// write it the way this tool reports them, and ending the run.
+    private func reportingFailure(of document: MarkdownWriter.Document, _ body: () throws -> Void) throws {
+        do {
+            try body()
+        }
+        catch let conflict as MarkdownWriter.Conflict {
+            printIf(true, "mail2md: \(conflict.path): differs from generated output (use --force to overwrite)")
+            throw Failure()
+        }
+        catch {
+            // Named the way the conflict above names it, so one file is not
+            // reported under two paths.
+            self.reportWriteFailure(at: document.url.path, error)
+            throw Failure()
         }
     }
 

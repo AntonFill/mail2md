@@ -124,10 +124,10 @@ struct Mail2mdTests {
         #expect(command.exists("gesuch.md") == false)
     }
 
-    /// The note is written before the attachments, so a note that would be
-    /// overwritten has to stop the run while the directory is still untouched.
-    /// Without that order the run would leave files behind for a note that was
-    /// never written.
+    /// The note is checked before the attachments are written, so a note that
+    /// would be overwritten has to stop the run while the directory is still
+    /// untouched. Without that order the run would leave files behind for a
+    /// note that was never written.
     @Test func conflictingNoteStopsTheRunBeforeAnyAttachmentIsWritten() throws {
         let command = try CommandRunner()
         defer { command.removeWorkspace() }
@@ -502,6 +502,31 @@ struct Mail2mdTests {
         #expect(run.exitCode == 1)
         #expect(run.standardOutput.isEmpty)
         #expect(run.standardError == "mail2md: \(locked.path): cannot be written\n")
+        // Until 1.5.0 the note was written first and linked files that were
+        // never written.
+        #expect(command.exists("gesuch.md") == false)
+    }
+
+    /// A note that cannot be written stops the run before any attachment is,
+    /// as a conflicting one does: the attachments would stand without it.
+    @Test func noteThatCannotBeWrittenLeavesNoAttachmentBehind() throws {
+        let command = try CommandRunner()
+        let locked = command.path("locked")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            command.removeWorkspace()
+        }
+        let input = try command.write(inlineDocumentEML, named: "gesuch.eml")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+        let output = locked.appendingPathComponent("gesuch.md")
+        let attachments = command.path("files")
+
+        let run = try command.run(["--output", output.path, "--attachments-dir", attachments.path, input.path])
+
+        #expect(run.exitCode == 1)
+        #expect(run.standardError == "mail2md: \(output.path): cannot be written\n")
+        #expect(FileManager.default.fileExists(atPath: attachments.path) == false)
     }
 
     // MARK: - Refusing the command line

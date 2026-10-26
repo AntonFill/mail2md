@@ -64,6 +64,48 @@ struct MarkdownWriterTests {
         #expect(try String(contentsOf: existing, encoding: .utf8) == "old")
     }
 
+    /// The check says what writing would run into, and writes nothing.
+    @Test func checkFindsAConflictWithoutWriting() throws {
+        let dir = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let existing = dir.appendingPathComponent("existing.md")
+        try "old".write(to: existing, atomically: true, encoding: .utf8)
+
+        #expect(throws: MarkdownWriter.Conflict.self) {
+            try MarkdownWriter(force: false).check([.init(url: existing, content: "changed")])
+        }
+        #expect(try String(contentsOf: existing, encoding: .utf8) == "old")
+        try MarkdownWriter(force: true).check([.init(url: existing, content: "changed")])
+        #expect(try String(contentsOf: existing, encoding: .utf8) == "old")
+    }
+
+    /// A folder that is missing or that may not be written to takes no file,
+    /// unless the file is there already as it would be written.
+    @Test func checkRefusesAFolderThatTakesNoFile() throws {
+        let dir = try makeTempDirectory()
+        let locked = dir.appendingPathComponent("locked")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: false)
+        let same = locked.appendingPathComponent("same.md")
+        try "same".write(to: same, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+        let writer = MarkdownWriter(force: false)
+
+        #expect(throws: (any Error).self) {
+            try writer.check([.init(url: locked.appendingPathComponent("new.md"), content: "new")])
+        }
+        #expect(throws: (any Error).self) {
+            try writer.check([.init(url: dir.appendingPathComponent("missing/new.md"), content: "new")])
+        }
+        try writer.check([.init(url: same, content: "same")])
+        try writer.check([.init(url: dir.appendingPathComponent("new.md"), content: "new")])
+        #expect(FileManager.default.fileExists(atPath: locked.appendingPathComponent("new.md").path) == false)
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("new.md").path) == false)
+    }
+
     @Test func forceOverwritesDivergingFile() throws {
         let dir = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

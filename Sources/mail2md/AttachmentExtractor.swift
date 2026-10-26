@@ -34,9 +34,9 @@ struct AttachmentExtractor {
     /// anything.
     ///
     /// It exists because the note links the files by the names they will have,
-    /// while the note itself is still written first: a conflicting note has to
+    /// while a note that cannot be written, a conflicting one above all, has to
     /// abort the run before any attachment lands on disk. So the CLI plans the
-    /// names, writes the note, and only then extracts.
+    /// names, checks the note, extracts, and only then writes the note.
     func plannedNames(_ parts: [AttachmentPart]) -> [String] {
         var taken = self.existingEntries()
 
