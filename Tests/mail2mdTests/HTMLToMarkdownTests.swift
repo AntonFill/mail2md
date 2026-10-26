@@ -779,6 +779,20 @@ struct TableTests {
         #expect(HTMLToMarkdown.convert(html) == "**Buchungsdetails**")
     }
 
+    /// A header cell is bold all over, so bold inside it adds nothing, and its
+    /// line stands between one pair of markers: in a table of layout, in a row
+    /// of data, and lifted above a table. Until 1.5.0 a line that began and
+    /// ended in bold counted as bold already, and a word between stayed plain.
+    @Test(arguments: [
+        ("<table><tr><th><b>Eins</b> zwei <b>drei</b></th></tr></table>", "**Eins zwei drei**"),
+        ("<table><tr><td>Name</td><td>Wert</td></tr><tr><th><b>Eins</b> zwei <b>drei</b></th><td>4</td></tr></table>", "|  |  |\n|---|---|\n| Name | Wert |\n| **Eins zwei drei** | 4 |"),
+        ("<table><tr><th colspan=\"2\"><b>Eins</b> zwei <b>drei</b></th></tr><tr><td>A</td><td>1</td></tr><tr><td>B</td><td>2</td></tr></table>", "**Eins zwei drei**\n\n|  |  |\n|---|---|\n| A | 1 |\n| B | 2 |"),
+        ("<table><tr><th><b>Eins</b></th></tr></table>", "**Eins**"),
+    ])
+    func setsTheLineOfAHeaderCellInBoldAsAWhole(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
     /// Not where its style sets a normal weight, and not where it holds
     /// blocks: an email framework lays out whole columns in header cells and
     /// sets their weight back in a stylesheet the emitter does not read.

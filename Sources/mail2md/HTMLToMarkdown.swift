@@ -1876,16 +1876,16 @@ extension HTMLToMarkdown {
         return address
     }
 
-    /// Bold, unless the text already is, or holds nothing but pictures, which
-    /// look the same either way.
+    /// The line of a header cell in bold as a whole, unless it holds nothing
+    /// but pictures, which look the same either way. A header cell is bold all
+    /// over, so bold inside it adds nothing and its markers go, as they go in a
+    /// button. Until 1.5.0 a line that began and ended in bold counted as bold
+    /// already, and a word between two bold ones stayed plain.
     fileprivate static func bold(_ text: String) -> String {
-        guard
-            text.hasPrefix("**") == false || text.hasSuffix("**") == false,
-            self.holdsText(text)
-        else {
+        guard self.holdsText(text) else {
             return text
         }
-        return "**" + text + "**"
+        return self.boldMarker + text.replacingOccurrences(of: self.boldMarker, with: "") + self.boldMarker
     }
 
     /// Whether a line holds text beside the pictures embedded in it.
