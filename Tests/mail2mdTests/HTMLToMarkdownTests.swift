@@ -263,6 +263,34 @@ struct EmphasisTests {
         #expect(HTMLToMarkdown.convert(html) == "mager")
     }
 
+    /// A child whose style sets the emphasis back shows plain inside it, so
+    /// the emphasis around it stops there and starts again after it, and an
+    /// element inside the child that sets it once more shows it once more.
+    /// Until 1.5.0 the child's text kept the markers: a parcel service sets
+    /// its links in normal weight in cells of bold text, and Outlook a phone
+    /// number in a signature (10 in 6 of 648 archive mails, 2026-10-26).
+    @Test(arguments: [
+        ("<b>Fett <span style=\"font-weight:normal\">mager</span> fett</b>", "**Fett** mager **fett**"),
+        ("<p><i>schräg <span style=\"font-style:normal\">gerade</span> schräg</i></p>", "*schräg* gerade *schräg*"),
+        ("<div style=\"font-weight:700\">Schweiz<p style=\"height:6px;margin:0\"> </p><a href=\"https://example.com/verfolgen\" style=\"font-weight:400\">Sendung verfolgen</a></div>", "**Schweiz**\n\n[Sendung verfolgen](https://example.com/verfolgen)"),
+        ("<b>Fett <span style=\"font-weight:normal\">mager <b>wieder fett</b></span></b>", "**Fett** mager **wieder fett**"),
+        ("<b><i>beides <span style=\"font-weight:normal\">nur schräg</span></i></b>", "***beides** nur schräg*"),
+        ("<table><tr><td>A</td><td style=\"font-weight:bold\">1 <span style=\"font-weight:normal\">(netto)</span></td></tr><tr><td>B</td><td>2</td></tr></table>", "|  |  |\n|---|---|\n| A | **1** (netto) |\n| B | 2 |"),
+    ])
+    func endsEmphasisWhereAChildSetsItBack(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// Only text a reader sees counts: a child that sets the weight back and
+    /// holds nothing but a space, or text a browser hides, changes nothing.
+    @Test(arguments: [
+        "<b>Fett<span style=\"font-weight:normal\"> </span>fett</b>",
+        "<b>Fett fett<span style=\"font-weight:normal;display:none\">versteckt</span></b>",
+    ])
+    func keepsTheEmphasisAroundAChildThatShowsNothing(html: String) {
+        #expect(HTMLToMarkdown.convert(html) == "**Fett fett**")
+    }
+
     /// The same for italics: a style that slants the text, and one that sets
     /// an `i` upright.
     @Test(arguments: [

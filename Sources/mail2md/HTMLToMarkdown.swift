@@ -58,6 +58,12 @@ enum HTMLToMarkdown {
             _ = try body
                 .select("script, style, head, title, meta, link, noscript, svg")
                 .remove()
+            // The walk decides emphasis on the tree itself (`handOn`), so the
+            // mail's own HTML cannot bring such a decision along.
+            let decided = try body.select("[\(self.emphasisAttribute)]")
+            for element in decided {
+                try element.removeAttr(self.emphasisAttribute)
+            }
             try self.markFiles(in: body, imageNames: imageNames)
             try self.markBoxes(in: body, format: format)
         }
@@ -898,15 +904,16 @@ extension HTMLToMarkdown {
             return
         }
 
-        var inner = Layout()
-        self.renderTag(of: element, into: &inner)
-        guard inner.holdsFormattedLines == false else {
+        let (inner, around) = self.layingOut(element, in: markers) { inner in
+            self.renderTag(of: element, into: &inner)
+        }
+        guard around.isEmpty == false else {
             layout.replay(inner.operations)
             return
         }
 
         var content = inner.content
-        for marker in markers.dropLast() {
+        for marker in around.dropLast() {
             var wrapped = Layout()
             wrapped.emphasize(content) { line in
                 return self.holdsText(line) ? marker : nil
@@ -914,8 +921,111 @@ extension HTMLToMarkdown {
             content = wrapped.content
         }
         layout.emphasize(content) { line in
-            return self.holdsText(line) ? markers.last : nil
+            return self.holdsText(line) ? around.last : nil
         }
+    }
+
+    /// An element in emphasis laid out by `layOut`, and the markers it can set
+    /// around the lines: none where a block Markdown marks stands among them,
+    /// and none of those that text inside it sets back. Those it hands on to
+    /// the pieces around that text (`handOn`), and it is laid out once more.
+    fileprivate static func layingOut(_ element: Element, in markers: [String], _ layOut: (inout Layout) -> Void) -> (layout: Layout, markers: [String]) {
+        var inner = Layout()
+        layOut(&inner)
+        guard inner.holdsFormattedLines == false else {
+            return (inner, [])
+        }
+
+        let handedOn = markers.filter { marker in
+            return element.getChildNodes().contains { self.holdsText(in: $0, without: marker, on: true) }
+        }
+        guard handedOn.isEmpty == false else {
+            return (inner, markers)
+        }
+
+        self.handOn(handedOn, from: element)
+        var pieces = Layout()
+        layOut(&pieces)
+        return (pieces, markers.filter { handedOn.contains($0) == false })
+    }
+
+    /// Whether a node holds text a reader sees outside the emphasis `marker`
+    /// stands for, where the emphasis around it is `on` or not. An element
+    /// whose tag or style says something definite decides for what it holds.
+    fileprivate static func holdsText(in node: Node, without marker: String, on: Bool) -> Bool {
+        if let text = node as? TextNode {
+            return on == false && self.isVisible(text)
+        }
+        guard let element = node as? Element else {
+            return false
+        }
+        let style = self.declarations(of: element)
+        guard self.isHidden(element, style: style) == false else {
+            return false
+        }
+
+        let isOn = self.sets(marker, element, style: style) ?? on
+        return element.getChildNodes().contains { self.holdsText(in: $0, without: marker, on: isOn) }
+    }
+
+    /// Whether a text holds a character a reader sees: not only space, nor
+    /// only characters of no width.
+    fileprivate static func isVisible(_ text: TextNode) -> Bool {
+        return text.getWholeText().unicodeScalars.contains { scalar in
+            return scalar.properties.isWhitespace == false && scalar.properties.isDefaultIgnorableCodePoint == false
+        }
+    }
+
+    /// Hands the emphasis `markers` stand for from an element on to what it
+    /// holds, because text inside it sets that emphasis back: the element
+    /// keeps the rest of its own, each run of text right inside it is wrapped
+    /// in a `span` that sets the markers, and each element inside it that does
+    /// not set them back sets them itself, and hands them on in turn where it
+    /// holds such text too. A header cell or a heading is bold of itself and
+    /// is laid out on its own, so it keeps what it has.
+    fileprivate static func handOn(_ markers: [String], from element: Element) {
+        let kept = self.emphasis(of: element).filter { markers.contains($0) == false }
+        _ = try? element.attr(self.emphasisAttribute, kept.joined(separator: " "))
+
+        let children = element.getChildNodes()
+        for child in children {
+            if let text = child as? TextNode {
+                if self.isVisible(text) {
+                    _ = try? text.wrap("<span \(self.emphasisAttribute)=\"\(markers.joined(separator: " "))\"></span>")
+                }
+                continue
+            }
+            guard
+                let child = child as? Element,
+                self.boldOfItself.contains(child.tagName()) == false
+            else {
+                continue
+            }
+
+            let style = self.declarations(of: child)
+            let shown = markers.filter { self.sets($0, child, style: style) ?? true }
+            guard shown.isEmpty == false else {
+                continue
+            }
+            let own = self.emphasis(of: child)
+            let decided = [self.italicMarker, self.boldMarker].filter { own.contains($0) || shown.contains($0) }
+            _ = try? child.attr(self.emphasisAttribute, decided.joined(separator: " "))
+        }
+    }
+
+    /// What an element's own tag or style says about the emphasis `marker`
+    /// stands for, nil where it leaves that to the element around it.
+    fileprivate static func sets(_ marker: String, _ element: Element, style: [String: String]) -> Bool? {
+        if marker == self.boldMarker {
+            if let heavy = style["font-weight"].flatMap({ self.isBold($0) }) {
+                return heavy
+            }
+            return ["strong", "b"].contains(element.tagName()) ? true : nil
+        }
+        if let slanted = style["font-style"].flatMap({ self.isItalic($0) }) {
+            return slanted
+        }
+        return ["em", "i"].contains(element.tagName()) ? true : nil
     }
 
     /// The markers an element sets its text between: those of the emphasis it
@@ -938,30 +1048,34 @@ extension HTMLToMarkdown {
     /// `div` or a `span` (61 of 647 archive mails, 2026-10-26). Headings and
     /// header cells are bold already and laid out on their own.
     fileprivate static func emphasis(of element: Element) -> [String] {
+        if element.hasAttr(self.emphasisAttribute) {
+            let decided = ((try? element.attr(self.emphasisAttribute)) ?? "").split(separator: " ").map { String($0) }
+            return [self.italicMarker, self.boldMarker].filter { decided.contains($0) }
+        }
+
         let tag = element.tagName()
-        guard ["th", "h1", "h2", "h3", "h4", "h5", "h6"].contains(tag) == false else {
+        guard self.boldOfItself.contains(tag) == false else {
             return []
         }
 
         let style = self.declarations(of: element)
-        var isItalic = ["em", "i"].contains(tag)
-        var isBold = ["strong", "b"].contains(tag)
-        if let slanted = style["font-style"].flatMap({ self.isItalic($0) }) {
-            isItalic = slanted
-        }
-        if let heavy = style["font-weight"].flatMap({ self.isBold($0) }) {
-            isBold = heavy
-        }
-
         var markers: [String] = []
-        if isItalic {
+        if self.sets(self.italicMarker, element, style: style) == true {
             markers.append(self.italicMarker)
         }
-        if isBold {
+        if self.sets(self.boldMarker, element, style: style) == true {
             markers.append(self.boldMarker)
         }
         return markers
     }
+
+    /// Elements bold of themselves that lay their text out on their own.
+    fileprivate static let boldOfItself: Set<String> = ["th", "h1", "h2", "h3", "h4", "h5", "h6"]
+
+    /// The attribute through which an element carries emphasis decided during
+    /// the walk (`handOn`): the markers it sets, in place of what its tag and
+    /// its style say.
+    fileprivate static let emphasisAttribute = "data-mail2md-emphasis"
 
     /// Whether a `font-weight` shows bold: `bold`, `bolder`, or a number from
     /// 600 up. Nil for a value that says nothing definite, `inherit` and the
@@ -1241,11 +1355,11 @@ extension HTMLToMarkdown {
     /// the cell, so the markers are set here, unless it holds a block Markdown
     /// marks.
     fileprivate static func lines(ofCell cell: Element) -> [String] {
-        var layout = Layout()
-        self.renderChildren(of: cell, into: &layout)
+        let (layout, markers) = self.layingOut(cell, in: self.markers(of: cell)) { inner in
+            self.renderChildren(of: cell, into: &inner)
+        }
         let lines = layout.content.trimmedLines.filter { $0.isEmpty == false }
 
-        let markers = layout.holdsFormattedLines ? [] : self.markers(of: cell)
         return lines.map { line in
             guard self.holdsText(line) else {
                 return line
