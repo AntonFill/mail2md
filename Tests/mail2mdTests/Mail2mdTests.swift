@@ -174,6 +174,20 @@ struct Mail2mdTests {
         #expect(obsidian.standardOutput.hasSuffix("---\n\nDavor\n\n> [!quote] Jane Doe\n> Betrag: CHF 100\n\nDanach\n"))
     }
 
+    /// A hashtag in the mail's text stays text where `--format obsidian` asks
+    /// for Obsidian's Markdown, in which it would become a tag of the vault.
+    @Test func keepsAHashtagFromBecomingATagAsTheFormatAsksFor() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(hashtagEML, named: "team.eml")
+
+        let markdown = try command.run(["-o", "-", input.path])
+        let obsidian = try command.run(["--format", "obsidian", "-o", "-", input.path])
+
+        #expect(markdown.standardOutput.hasSuffix("\nGrüsse vom #TeamHolidayCheck\n"))
+        #expect(obsidian.standardOutput.hasSuffix("\nGrüsse vom \\#TeamHolidayCheck\n"))
+    }
+
     // MARK: - Inline images
 
     /// A picture the note leaves out is named on stderr with the size it is
@@ -743,6 +757,18 @@ private let cardEML = """
     \r
     <html><body><div>Davor</div><div style="border:2px solid #cccccc"><div style="font-weight:bold">Jane Doe</div>\r
     <div>Betrag: CHF 100</div></div><div>Danach</div></body></html>\r
+    """
+
+/// A plain mail signed with a hashtag, for the tag escaped in Obsidian's
+/// Markdown.
+private let hashtagEML = """
+    From: Team <team@example.com>\r
+    To: Jane Doe <jane@example.com>\r
+    Subject: Willkommen\r
+    Date: Mon, 26 Oct 2026 10:00:00 +0100\r
+    Content-Type: text/plain; charset=utf-8\r
+    \r
+    Grüsse vom #TeamHolidayCheck\r
     """
 
 /// A `Date` header no parser can read, for the warning path of the command.

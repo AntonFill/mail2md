@@ -277,3 +277,72 @@ struct FrontmatterContractTests {
         #expect(markdown.contains("\ncc: \"Müller Anna <anna@example.com>, Team Lead <lead@example.com>\"\nvia:\n"))
     }
 }
+
+// MARK: -
+
+/// A `#` Obsidian would read as the start of a tag, in `--format obsidian`.
+/// Senders write hashtags into their mail, `#TeamHolidayCheck`, and a ticket
+/// system a code, and each became a tag of the vault. Measured in Obsidian on
+/// 2026-10-26: a tag starts at the start of a line, after a space, and right
+/// inside emphasis or a link's text, and runs over letters, digits, `_`, `-`
+/// and `/` that are not all digits.
+struct TagTests {
+
+    static let renderer = MarkdownRenderer(format: .obsidian)
+
+    @Test(arguments: [
+        ("#TeamHolidayCheck", "\\#TeamHolidayCheck"),
+        ("**#GelbGrün**", "**\\#GelbGrün**"),
+        ("CorrespondenceCode #deb624$", "CorrespondenceCode \\#deb624$"),
+        ("[#imLink](https://example.com)", "[\\#imLink](https://example.com)"),
+        ("Farbe #ff0000.", "Farbe \\#ff0000."),
+        ("#tag/sub und #mit-strich_unter", "\\#tag/sub und \\#mit-strich_unter"),
+        ("> #zitiert", "> \\#zitiert"),
+        (">#zitiert", ">\\#zitiert"),
+        ("| #zelle | #1a |", "| \\#zelle | \\#1a |"),
+        ("*#kursiv* und ~~#gestrichen~~", "*\\#kursiv* und ~~\\#gestrichen~~"),
+    ])
+    func escapesWhatObsidianReadsAsATag(body: String, expected: String) {
+        #expect(Self.renderer.escapingTags(body) == expected)
+    }
+
+    @Test(arguments: [
+        "Nummer #123",
+        "C# und x#y",
+        "(#inKlammer) und \"#inQuote\" und Satz.#direkt",
+        "\\#schon maskiert",
+        "Mit `#code` darin",
+        "# Überschrift",
+        "## Unterüberschrift",
+        "[Deutsch](#German)",
+        "https://example.com/#anker",
+        "# ",
+        "#",
+    ])
+    func leavesWhatObsidianReadsAsText(body: String) {
+        #expect(Self.renderer.escapingTags(body) == body)
+    }
+
+    /// Code would show the backslash, so it stays as it is, in a quote too,
+    /// and a fence that does not close holds code to the end, as Markdown
+    /// reads it.
+    @Test func leavesCodeAsItIs() {
+        let body = "#vorher\n\n```\n#include <x>\n```\n\n> ```\n> #include <y>\n> ```\n\n#nachher\n\n~~~\n#offen"
+        let expected = "\\#vorher\n\n```\n#include <x>\n```\n\n> ```\n> #include <y>\n> ```\n\n\\#nachher\n\n~~~\n#offen"
+
+        #expect(Self.renderer.escapingTags(body) == expected)
+    }
+
+    /// Only Obsidian reads a tag there: plain Markdown keeps the `#`, and so
+    /// does the frontmatter, in either format.
+    @Test func escapesTheBodyOnlyInObsidiansMarkdown() {
+        let message = EMLParser().parse("Subject: #Neu im Team\r\nDate: Mon, 26 Oct 2026 10:00:00 +0100\r\n\r\nGrüsse vom #TeamHolidayCheck\r\n")
+
+        let markdown = MarkdownRenderer(timeZone: TimeZone(identifier: "UTC")!).render(message)
+        let obsidian = MarkdownRenderer(timeZone: TimeZone(identifier: "UTC")!, format: .obsidian).render(message)
+
+        #expect(markdown.contains("\nGrüsse vom #TeamHolidayCheck\n"))
+        #expect(obsidian.contains("\nGrüsse vom \\#TeamHolidayCheck\n"))
+        #expect(obsidian.contains("subject: \"#Neu im Team\"\n"))
+    }
+}

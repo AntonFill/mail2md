@@ -81,7 +81,7 @@ struct Mail2md: Equatable {
         // One .eml converts to exactly one Markdown file. A quoted reply chain
         // stays in that single file (as the mail itself keeps it); the semantic
         // per-message split is the consumer's job, not this stateless converter's.
-        let renderer = MarkdownRenderer(linksAttachments: extraction != nil)
+        let renderer = MarkdownRenderer(linksAttachments: extraction != nil, format: self.format)
         let note = renderer.render(noted)
 
         // The note links the attachments, so it is written once they exist:
@@ -519,7 +519,7 @@ extension Mail2md {
                 HelpPage.Entry("--attachments-dir <attachments-dir>", "Directory for extracted attachments; implies --extract-attachments. Defaults next to the output, and is needed when the output is standard output."),
                 HelpPage.Entry("--attachment-name <attachment-name>", "Rename extracted attachments after a pattern, e.g. \"{date} {time} ENCL {name}\"; placeholders are {name}, {ext}, {date} and {time}, the latter two with an optional format ({date:yyyy.MM.dd}). Implies --extract-attachments."),
                 HelpPage.Entry("--inline-images", "Write the pictures the mail shows from its own parts (cid:) as files too, and embed each where it stands. Implies --extract-attachments."),
-                HelpPage.Entry("--format <format>", "The Markdown to write: markdown, or obsidian, which sets a card the mail draws apart as a callout instead of between rules. Either links extracted files the way Obsidian does, as [[name]]. (default: markdown)"),
+                HelpPage.Entry("--format <format>", "The Markdown to write: markdown, or obsidian, which sets a card the mail draws apart as a callout instead of between rules and keeps a # in the text from becoming a tag. Either links extracted files the way Obsidian does, as [[name]]. (default: markdown)"),
                 HelpPage.Entry("--version", "Show the version."),
                 HelpPage.Entry("-h, --help", "Show help information."),
             ]),

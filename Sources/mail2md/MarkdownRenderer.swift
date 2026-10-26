@@ -9,7 +9,8 @@ import Foundation
 
 /// The Markdown a note is written in. Plain Markdown is read anywhere;
 /// Obsidian's adds syntax only Obsidian shows, a box the mail sets apart
-/// written as a callout rather than between rules. Either links the files a
+/// written as a callout rather than between rules, and escapes what only
+/// Obsidian reads as syntax, a `#` that would start a tag. Either links the files a
 /// run extracts with Obsidian's wikilinks and embeds, which other readers show
 /// as text: the format names the Markdown of the mail's own content.
 enum OutputFormat: String, CaseIterable {
@@ -51,7 +52,11 @@ struct MarkdownRenderer {
     ///   zone. The sender's own offset (`EmailMessage.timeZone`) is deliberately
     ///   not used here: a mail sent from another zone must still read in the
     ///   reader's local time.
-    init(timeZone: TimeZone = .current, linksAttachments: Bool = false) {
+    /// The Markdown the body is written in. Obsidian's keeps a `#` in the
+    /// text from becoming a tag (`escapingTags`).
+    let format: OutputFormat
+
+    init(timeZone: TimeZone = .current, linksAttachments: Bool = false, format: OutputFormat = .markdown) {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = timeZone
@@ -59,6 +64,7 @@ struct MarkdownRenderer {
 
         self._dateFormatter = formatter
         self.linksAttachments = linksAttachments
+        self.format = format
     }
 
     fileprivate let _dateFormatter: DateFormatter
@@ -76,7 +82,7 @@ struct MarkdownRenderer {
         lines.append(contentsOf: self.attachmentsField(message.attachments))
         lines.append("---")
         lines.append("")
-        lines.append(message.body)
+        lines.append(self.format == .obsidian ? self.escapingTags(message.body) : message.body)
         lines.append(contentsOf: self.attachmentBlock(message.attachments))
         lines.append("")
 
@@ -245,5 +251,99 @@ extension MarkdownRenderer {
             return "[[\(target)]]"
         }
         return "[[\(target)|\(alias)]]"
+    }
+}
+
+// MARK: - Obsidian's tags
+extension MarkdownRenderer {
+
+    /// The body as Obsidian is to read it: a `#` Obsidian would take for the
+    /// start of a tag is escaped, `\#`, as the vault escapes it in quoted
+    /// wording. Senders write hashtags into their mail, `#TeamHolidayCheck`,
+    /// and a ticket system a code, and each became a tag of the vault (9 in 7
+    /// of 648 archive mails, 2026-10-26).
+    ///
+    /// Measured in Obsidian with a probe on 2026-10-26: a tag starts at the
+    /// start of a line, after a space, and right inside emphasis or a link's
+    /// text, so after `*`, `_`, `~`, `[` or a quote's `>` as well, and runs over
+    /// letters, digits, `_`, `-` and `/` that are not all digits. After `(`, a
+    /// quote mark or a letter there is none, nor in `#123`. Code is left as it
+    /// is, in a quote too, since there the backslash would show; a fence that
+    /// never closes holds code to the end, as Markdown reads it.
+    func escapingTags(_ body: String) -> String {
+        guard body.contains("#") else {
+            return body
+        }
+
+        var fence: (character: Character, count: Int)?
+        var escaped: [String] = []
+        let lines = body.components(separatedBy: "\n")
+        for line in lines {
+            let content = String(line.drop { $0 == ">" || $0 == " " })
+            if let open = fence {
+                if BodyCleaner.closes(open, content) {
+                    fence = nil
+                }
+                escaped.append(line)
+                continue
+            }
+            if let opening = BodyCleaner.fence(opening: content) {
+                fence = opening
+                escaped.append(line)
+                continue
+            }
+            escaped.append(self.escapingTags(inLine: line))
+        }
+
+        return escaped.joined(separator: "\n")
+    }
+
+    /// A line with each `#` escaped that would start a tag, its code spans
+    /// passed over.
+    private func escapingTags(inLine line: String) -> String {
+        guard line.contains("#") else {
+            return line
+        }
+
+        var escaped = ""
+        var previous: Character?
+        var rest = line[...]
+        while let character = rest.first {
+            if character == "`" {
+                let run = rest.prefix { $0 == "`" }
+                let afterRun = rest[run.endIndex...]
+                let span = afterRun.range(of: run).map { rest[..<$0.upperBound] } ?? run
+                escaped += span
+                previous = "`"
+                rest = rest[span.endIndex...]
+                continue
+            }
+
+            if character == "#", self.opensTag(after: previous), self.namesTag(rest.dropFirst()) {
+                escaped += "\\"
+            }
+            escaped.append(character)
+            previous = character
+            rest = rest.dropFirst()
+        }
+
+        return escaped
+    }
+
+    /// Whether a `#` after this character starts a tag: at the start of a
+    /// line, after a space, and right inside the emphasis, the link text or
+    /// the quote Markdown writes.
+    private func opensTag(after previous: Character?) -> Bool {
+        guard let previous else {
+            return true
+        }
+        return previous.isWhitespace || ["*", "_", "~", "[", ">"].contains(previous)
+    }
+
+    /// Whether the text after a `#` names a tag: letters, digits, `_`, `-` and
+    /// `/`, not all of them digits.
+    private func namesTag(_ text: Substring) -> Bool {
+        let name = text.prefix { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" || $0 == "/" }
+        return name.contains { $0.isNumber == false }
     }
 }

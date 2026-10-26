@@ -16,7 +16,7 @@ mail2md Mail.eml --extract-attachments   # also write attachment files alongside
 mail2md Mail.eml --attachments-dir ./att # write attachments into ./att (implies extraction)
 mail2md Mail.eml --attachment-name "{date} {time} ENCL {name}"   # rename them as they are written
 mail2md Mail.eml --inline-images         # also write the pictures the mail shows and embed them in place
-mail2md Mail.eml --format obsidian       # write the cards a mail sets apart as Obsidian callouts
+mail2md Mail.eml --format obsidian       # write Obsidian's Markdown: cards as callouts, no stray tags
 mail2md Mail.eml --verbose               # report what was parsed and written
 mail2md Mail.eml -o -                    # write the note to stdout instead of a file
 cat Mail.eml | mail2md -                 # read the mail from stdin, write the note to stdout
@@ -133,6 +133,8 @@ Some mails set their content apart in boxes: a card per person, a summary under 
 ```
 
 Only the outermost box is a card, never one inside another, and never the box holding the mail's last line, which is its footer. Inside, a one-line box in light text on a dark colour is a button and is set in bold, and columns that MJML sets side by side pair up as a table where each holds as many lines as the others.
+
+`--format obsidian` also escapes a `#` that Obsidian would read as the start of a tag, `\#TeamHolidayCheck`, so that a sender's hashtag or a ticket's code in the text does not turn into a tag of the vault. Code stays as it is.
 
 ## Pipes
 

@@ -248,8 +248,9 @@ extension BodyCleaner {
     }
 
     /// The fence a line opens, as its character and its length: three or more
-    /// backticks or tildes at the start of the line.
-    fileprivate static func fence(opening line: String) -> (character: Character, count: Int)? {
+    /// backticks or tildes at the start of the line. The renderer reads code
+    /// with it too (`MarkdownRenderer.escapingTags`).
+    static func fence(opening line: String) -> (character: Character, count: Int)? {
         guard
             let first = line.first,
             first == "`" || first == "~"
@@ -263,7 +264,7 @@ extension BodyCleaner {
 
     /// Whether a line closes the fence: the same character at least as often,
     /// and nothing after it but spaces.
-    fileprivate static func closes(_ fence: (character: Character, count: Int), _ line: String) -> Bool {
+    static func closes(_ fence: (character: Character, count: Int), _ line: String) -> Bool {
         let run = line.prefix { $0 == fence.character }.count
         return run >= fence.count && line.dropFirst(run).allSatisfy { $0 == " " || $0 == "\t" }
     }
