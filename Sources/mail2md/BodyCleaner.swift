@@ -72,8 +72,22 @@ extension BodyCleaner {
             return followsTwin ? "" : wrapper.1
         }
 
-        // A URL immediately followed by its own angle-wrapped duplicate.
-        text = text.replacing(/(https?:\/\/[^\s<>]+)<\1>/) { $0.1 }
+        // A URL followed by its link in angle brackets, right after it or
+        // after a space, keeps the URL alone: the plain form of a link, which
+        // Outlook writes with its target in brackets, in Outlook's Safelinks
+        // wrapper where it rewrote the link (1 mail of 648, 2026-10-26).
+        let linked = text
+        text = linked.replacing(/[ \t]?<(https?:\/\/[^\s<>]+)>/) { bracket in
+            let before = linked[..<bracket.range.lowerBound]
+            let shown = before.reversed().prefix { $0.isWhitespace == false }.reversed()
+            guard
+                shown.isEmpty == false,
+                self.address(String(shown)) == self.address(self.target(of: String(bracket.1)))
+            else {
+                return String(bracket.0)
+            }
+            return ""
+        }
 
         // Trailing whitespace per line, then collapse blank-line runs to one.
         // A line that held nothing but ballast goes as a whole, and with it
@@ -170,6 +184,33 @@ extension BodyCleaner {
         return line
             .replacing(/\[<[^<>\]\n]+\.(?:png|jpe?g|gif|bmp|tiff?|heic|webp)>\]\([^)\s]*\)[ \t]*/.ignoresCase(), with: "")
             .replacing(/[ \t]+$/, with: "")
+    }
+
+    /// The address a link leads to: the one Outlook's Safelinks wrapper holds
+    /// in its `url` parameter, else the link itself.
+    fileprivate static func target(of link: String) -> String {
+        guard
+            let components = URLComponents(string: link),
+            let host = components.host?.lowercased(),
+            host.hasSuffix(".safelinks.protection.outlook.com"),
+            let wrapped = components.queryItems?.first(where: { $0.name == "url" })?.value
+        else {
+            return link
+        }
+        return wrapped
+    }
+
+    /// An address as a reader compares two: without its scheme and a closing
+    /// slash, in any case.
+    fileprivate static func address(_ link: String) -> String {
+        var address = link.lowercased()
+        for scheme in ["https://", "http://"] where address.hasPrefix(scheme) {
+            address.removeFirst(scheme.count)
+        }
+        if address.hasSuffix("/") {
+            address.removeLast()
+        }
+        return address
     }
 
     /// Whether a line holds no text: empty, or nothing but quote markers.

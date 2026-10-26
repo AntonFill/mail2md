@@ -71,6 +71,22 @@ struct BodyCleanerTests {
         #expect(BodyCleaner.clean("https://example.com/x<https://example.com/x>") == "https://example.com/x")
     }
 
+    /// The brackets hold the link of the URL before them, after a space as
+    /// well, and in Outlook's Safelinks wrapper where Outlook rewrote the link
+    /// (1 mail of 648 in the archive, 2026-10-26).
+    @Test func collapsesTheLinkInBracketsOntoTheURLBeforeIt() {
+        #expect(BodyCleaner.clean("Siehe https://example.com/konto <https://example.com/konto/>.") == "Siehe https://example.com/konto.")
+        #expect(BodyCleaner.clean("Siehe https://example.com/konto <https://eur02.safelinks.protection.outlook.com/?url=https%3A%2F%2Fexample.com%2Fkonto&data=05%7C01%7Cservice%40example.com%7C0&reserved=0> bitte.") == "Siehe https://example.com/konto bitte.")
+    }
+
+    @Test func keepsALinkInBracketsThatLeadsElsewhere() {
+        let elsewhere = "Siehe https://example.com/konto <https://eur02.safelinks.protection.outlook.com/?url=https%3A%2F%2Fexample.com%2Fanders&data=0>"
+        let afterText = "Kontakt <https://example.com/kontakt>"
+
+        #expect(BodyCleaner.clean(elsewhere) == elsewhere)
+        #expect(BodyCleaner.clean(afterText) == afterText)
+    }
+
     @Test func stripsCIDImageReferences() {
         let input = "Grüsse\n[cid:logo001.png]\n\nAndré"
         #expect(BodyCleaner.clean(input) == "Grüsse\n\nAndré")
