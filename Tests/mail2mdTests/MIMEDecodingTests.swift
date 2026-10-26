@@ -180,6 +180,14 @@ struct HeaderParametersTests {
         #expect(parsed.parameters == ["name": "Formular (Muster; signed).pdf", "x-apple-part-url": "1"])
     }
 
+    /// Only a value that opens with a quote is quoted, so a stray quote inside
+    /// a bare value keeps the parameters after it apart.
+    @Test func quotesOnlyAValueThatOpensWithAQuote() {
+        let parsed = parseHeaderParameters("attachment; filename=a\"b.pdf; size=1")
+
+        #expect(parsed.parameters == ["filename": "a\"b.pdf", "size": "1"])
+    }
+
     /// A quoted value resolves `\"` and `\\`. Any other backslash stays, as in
     /// a Windows path some mailers write unescaped.
     @Test func resolvesTheEscapesOfAQuotedValue() {

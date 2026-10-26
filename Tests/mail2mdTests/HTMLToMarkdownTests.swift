@@ -156,6 +156,9 @@ struct HTMLToMarkdownTests {
         ("<a href=\"mailto: service@example.com?subject=Mein Abo\">Abo</a>", "[Abo](<mailto: service@example.com?subject=Mein Abo>)"),
         ("<a href=\"https://example.com/a_(b\">Wiki</a>", "[Wiki](<https://example.com/a_(b>)"),
         ("<a href=\"https://example.com/a <b>\">Spitz</a>", "[Spitz](<https://example.com/a \\<b\\>>)"),
+        ("<a href=\"&lt;https://example.com/x&gt;\">Spitz</a>", "[Spitz](<\\<https://example.com/x\\>>)"),
+        ("<a href=\"https://example.com/a b\\c\">Pfad</a>", "[Pfad](<https://example.com/a b\\\\c>)"),
+        ("<a href=\"https://example.com/a)b(\">Wiki</a>", "[Wiki](<https://example.com/a)b(>)"),
         ("<a href=\"https://example.com/lang\n\t/weg\">Umbruch</a>", "[Umbruch](https://example.com/lang/weg)"),
         ("<a href=\"https://example.com/a_(b)\">Wiki</a>", "[Wiki](https://example.com/a_(b))"),
     ])
@@ -275,20 +278,33 @@ struct EmphasisTests {
         ("<div style=\"font-weight:700\">Schweiz<p style=\"height:6px;margin:0\"> </p><a href=\"https://example.com/verfolgen\" style=\"font-weight:400\">Sendung verfolgen</a></div>", "**Schweiz**\n\n[Sendung verfolgen](https://example.com/verfolgen)"),
         ("<b>Fett <span style=\"font-weight:normal\">mager <b>wieder fett</b></span></b>", "**Fett** mager **wieder fett**"),
         ("<b><i>beides <span style=\"font-weight:normal\">nur schräg</span></i></b>", "***beides** nur schräg*"),
+        // The element keeps the emphasis it does not hand on, so italics
+        // inside it set no second pair of markers.
+        ("<b><i>beides <span style=\"font-weight:normal\">nur <em>schräg</em></span></i></b>", "***beides** nur schräg*"),
         ("<table><tr><td>A</td><td style=\"font-weight:bold\">1 <span style=\"font-weight:normal\">(netto)</span></td></tr><tr><td>B</td><td>2</td></tr></table>", "|  |  |\n|---|---|\n| A | **1** (netto) |\n| B | 2 |"),
+        // A header cell is bold of itself and keeps its own, as before.
+        ("<table><tr style=\"font-weight:bold\"><th>Kopf</th><td>Wert <span style=\"font-weight:normal\">netto</span></td></tr></table>", "**Kopf** **Wert** netto"),
     ])
     func endsEmphasisWhereAChildSetsItBack(html: String, expected: String) {
         #expect(HTMLToMarkdown.convert(html) == expected)
     }
 
     /// Only text a reader sees counts: a child that sets the weight back and
-    /// holds nothing but a space, or text a browser hides, changes nothing.
+    /// holds nothing but a space, a character of no width, or text a browser
+    /// hides, changes nothing.
     @Test(arguments: [
-        "<b>Fett<span style=\"font-weight:normal\"> </span>fett</b>",
-        "<b>Fett fett<span style=\"font-weight:normal;display:none\">versteckt</span></b>",
+        ("<b>Fett<span style=\"font-weight:normal\"> </span>fett</b>", "**Fett fett**"),
+        ("<b>Fett<span style=\"font-weight:normal\">\u{200B}</span> fett</b>", "**Fett\u{200B} fett**"),
+        ("<b>Fett <span style=\"font-weight:normal;display:none\">versteckt</span> fett</b>", "**Fett fett**"),
     ])
-    func keepsTheEmphasisAroundAChildThatShowsNothing(html: String) {
-        #expect(HTMLToMarkdown.convert(html) == "**Fett fett**")
+    func keepsTheEmphasisAroundAChildThatShowsNothing(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// The walk marks what it decides about emphasis on the tree, so a mark
+    /// the mail's own HTML brings along is cleared first.
+    @Test func setsNoEmphasisAMarkInTheMailAsksFor() {
+        #expect(HTMLToMarkdown.convert("<p><span data-mail2md-emphasis=\"**\">frech</span></p>") == "frech")
     }
 
     /// The same for italics: a style that slants the text, and one that sets

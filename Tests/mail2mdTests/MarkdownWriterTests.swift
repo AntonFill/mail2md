@@ -18,6 +18,20 @@ struct MarkdownWriterTests {
         return url
     }
 
+    /// The code of the Cocoa error `body` throws, nil where it throws none.
+    private func code(_ body: () throws -> Void) -> CocoaError.Code? {
+        do {
+            try body()
+            return nil
+        }
+        catch let error as CocoaError {
+            return error.code
+        }
+        catch {
+            return nil
+        }
+    }
+
     @Test func writesNewFiles() throws {
         let dir = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -94,12 +108,9 @@ struct MarkdownWriterTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
         let writer = MarkdownWriter(force: false)
 
-        #expect(throws: (any Error).self) {
-            try writer.check([.init(url: locked.appendingPathComponent("new.md"), content: "new")])
-        }
-        #expect(throws: (any Error).self) {
-            try writer.check([.init(url: dir.appendingPathComponent("missing/new.md"), content: "new")])
-        }
+        // The error says why, under --verbose.
+        #expect(self.code { try writer.check([.init(url: locked.appendingPathComponent("new.md"), content: "new")]) } == .fileWriteNoPermission)
+        #expect(self.code { try writer.check([.init(url: dir.appendingPathComponent("missing/new.md"), content: "new")]) } == .fileNoSuchFile)
         try writer.check([.init(url: same, content: "same")])
         try writer.check([.init(url: dir.appendingPathComponent("new.md"), content: "new")])
         #expect(FileManager.default.fileExists(atPath: locked.appendingPathComponent("new.md").path) == false)
