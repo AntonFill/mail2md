@@ -270,7 +270,7 @@ extension HTMLToMarkdown {
             layout.space()
         }
 
-        self.renderTag(of: element, into: &layout)
+        self.renderEmphasized(element, into: &layout)
 
         if let gaps = frame.gaps {
             layout.gap(gaps.bottom)
@@ -288,8 +288,6 @@ extension HTMLToMarkdown {
         case "h1", "h2", "h3", "h4", "h5", "h6":
             let level = Int(tag.dropFirst()) ?? 1
             self.heading(element, level: level, into: &layout)
-        case "strong", "b", "em", "i":
-            self.emphasis(element, into: &layout)
         case "a":
             self.link(element, into: &layout)
         case "img":
@@ -376,7 +374,16 @@ extension HTMLToMarkdown {
     /// A list, one line per item. A nested list is folded into its item's
     /// line, and anything a sloppy mailer put between the items is kept as a
     /// line of its own rather than dropped.
+    ///
+    /// A list whose style hides its bullets is a stack of lines to a reader
+    /// and is laid out as blocks: a card sets the details of an insurance
+    /// that way (3 of 647 archive mails, 2026-10-26).
     fileprivate static func list(_ element: Element, ordered: Bool, into layout: inout Layout) {
+        guard self.showsMarkers(element) else {
+            self.block(element, into: &layout)
+            return
+        }
+
         var lines: [String] = []
         var number = 1
 
@@ -416,6 +423,23 @@ extension HTMLToMarkdown {
         layout.gap(2)
         layout.writeLines(lines)
         layout.gap(2)
+    }
+
+    /// Whether a list shows bullets or numbers. Its style hides them with the
+    /// type `none`, set on its own or in the shorthand with nothing but a
+    /// position beside it; beside a type, `none` is the bullet's picture.
+    fileprivate static func showsMarkers(_ list: Element) -> Bool {
+        let style = self.declarations(of: list)
+        if let type = style["list-style-type"] {
+            return type != "none"
+        }
+        guard let shorthand = style["list-style"] else {
+            return true
+        }
+
+        let values = shorthand.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        let hidesType = values.contains("none") && values.allSatisfy { ["none", "inside", "outside"].contains($0) }
+        return hidesType == false
     }
 
     fileprivate static func quote(_ element: Element, into layout: inout Layout) {
@@ -466,40 +490,123 @@ extension HTMLToMarkdown {
 // MARK: - Inline elements
 extension HTMLToMarkdown {
 
-    /// The marker each kind of emphasis sets its text between.
-    fileprivate static let emphasisMarkers = ["strong": "**", "b": "**", "em": "*", "i": "*"]
+    /// The markers emphasis sets its text between.
+    fileprivate static let boldMarker = "**"
+    fileprivate static let italicMarker = "*"
 
-    /// Emphasis around each line of text. A picture looks the same with it or
-    /// without, so a line of nothing but pictures gets no markers.
+    /// An element in the emphasis it shows, each line of its text between the
+    /// markers, italics inside bold. A picture looks the same with emphasis or
+    /// without, so a line of nothing but pictures gets no markers, and so does
+    /// a block Markdown marks, a list or a heading: markers around each of its
+    /// lines would break it.
     ///
     /// Inside emphasis of its own kind, a `b` in a `strong`, an element adds
     /// nothing a reader sees and sets no markers, which would only stand
     /// doubled. Two spans of one kind that meet are joined by the layout, see
     /// `Layout.write(_:emphasis:)`.
-    fileprivate static func emphasis(_ element: Element, into layout: inout Layout) {
-        guard
-            let marker = self.emphasisMarkers[element.tagName()],
-            self.isInsideEmphasis(element, marker: marker) == false
-        else {
-            self.renderChildren(of: element, into: &layout)
+    fileprivate static func renderEmphasized(_ element: Element, into layout: inout Layout) {
+        let markers = self.markers(of: element)
+        guard markers.isEmpty == false else {
+            self.renderTag(of: element, into: &layout)
             return
         }
 
-        layout.emphasize(self.content(of: element)) { line in
-            return self.holdsText(line) ? marker : nil
+        var inner = Layout()
+        self.renderTag(of: element, into: &inner)
+        guard inner.holdsFormattedLines == false else {
+            layout.replay(inner.operations)
+            return
+        }
+
+        var content = inner.content
+        for marker in markers.dropLast() {
+            var wrapped = Layout()
+            wrapped.emphasize(content) { line in
+                return self.holdsText(line) ? marker : nil
+            }
+            content = wrapped.content
+        }
+        layout.emphasize(content) { line in
+            return self.holdsText(line) ? markers.last : nil
         }
     }
 
-    /// Whether an element around this one sets its text between the same
-    /// marker.
-    fileprivate static func isInsideEmphasis(_ element: Element, marker: String) -> Bool {
-        return element.parents().array().contains { self.emphasisMarkers[$0.tagName()] == marker }
+    /// The markers an element sets its text between: those of the emphasis it
+    /// shows, less those an element around it sets already.
+    fileprivate static func markers(of element: Element) -> [String] {
+        let own = self.emphasis(of: element)
+        guard own.isEmpty == false else {
+            return []
+        }
+
+        let around = element.parents().array().flatMap { self.emphasis(of: $0) }
+        return own.filter { around.contains($0) == false }
+    }
+
+    /// The emphasis an element shows of its own, as markers, italics first.
+    ///
+    /// `b` and `strong` are bold, `em` and `i` italic, and any element is what
+    /// its style makes it, the style winning over the tag as in a browser: an
+    /// email framework sets a name or an amount in bold through the style of a
+    /// `div` or a `span` (61 of 647 archive mails, 2026-10-26). Headings and
+    /// header cells are bold already and laid out on their own.
+    fileprivate static func emphasis(of element: Element) -> [String] {
+        let tag = element.tagName()
+        guard ["th", "h1", "h2", "h3", "h4", "h5", "h6"].contains(tag) == false else {
+            return []
+        }
+
+        let style = self.declarations(of: element)
+        var isItalic = ["em", "i"].contains(tag)
+        var isBold = ["strong", "b"].contains(tag)
+        if let slanted = style["font-style"].flatMap({ self.isItalic($0) }) {
+            isItalic = slanted
+        }
+        if let heavy = style["font-weight"].flatMap({ self.isBold($0) }) {
+            isBold = heavy
+        }
+
+        var markers: [String] = []
+        if isItalic {
+            markers.append(self.italicMarker)
+        }
+        if isBold {
+            markers.append(self.boldMarker)
+        }
+        return markers
+    }
+
+    /// Whether a `font-weight` shows bold: `bold`, `bolder`, or a number from
+    /// 600 up. Nil for a value that says nothing definite, `inherit` and the
+    /// like, which leaves the decision to the tag.
+    fileprivate static func isBold(_ weight: String) -> Bool? {
+        switch weight {
+        case "bold", "bolder":
+            return true
+        case "normal", "lighter":
+            return false
+        default:
+            return Double(weight).map { $0 >= 600 }
+        }
+    }
+
+    /// Whether a `font-style` slants the text, `italic` or `oblique` with or
+    /// without an angle. Nil for a value that says nothing definite.
+    fileprivate static func isItalic(_ style: String) -> Bool? {
+        if style == "italic" || style.hasPrefix("oblique") {
+            return true
+        }
+        if style == "normal" {
+            return false
+        }
+        return nil
     }
 
     /// A link as `[text](href)`, its text on one line and its brackets
-    /// escaped. A link whose text is its own address, give or take the scheme
-    /// and a closing slash, is written as that text: Outlook links every
-    /// address it prints, and the Markdown link would show it twice.
+    /// escaped. A link whose text is its own address, give or take the scheme,
+    /// a closing slash and the emphasis around it, is written as that text:
+    /// Outlook links every address it prints, and the Markdown link would show
+    /// it twice.
     ///
     /// A link around links, a job card or the preview of a repository, is
     /// taken apart, and its inner links keep their targets: Markdown cannot
@@ -525,7 +632,7 @@ extension HTMLToMarkdown {
         guard
             href.isEmpty == false,
             text.isEmpty == false,
-            self.address(text) != self.address(href)
+            self.address(text.trimmingCharacters(in: ["*"])) != self.address(href)
         else {
             layout.place(content) { line in
                 return line
@@ -682,7 +789,7 @@ extension HTMLToMarkdown {
             let cells = cellElements.map { cell in
                 let span = Int(((try? cell.attr("colspan")) ?? "").trimmingCharacters(in: .whitespaces)) ?? 1
                 return Cell(
-                    lines: self.content(of: cell).trimmedLines.filter { $0.isEmpty == false },
+                    lines: self.lines(ofCell: cell),
                     isHeader: isHeaderRow || cell.tagName() == "th",
                     span: max(1, span)
                 )
@@ -699,6 +806,24 @@ extension HTMLToMarkdown {
             return row.filter { $0.holdsText }.count >= 2
         }
         return holdsData ? rows : nil
+    }
+
+    /// The lines of a cell of data, in the emphasis the cell's own style sets,
+    /// as the total of a receipt is set bold. Its content is laid out without
+    /// the cell, so the markers are set here, unless it holds a block Markdown
+    /// marks.
+    fileprivate static func lines(ofCell cell: Element) -> [String] {
+        var layout = Layout()
+        self.renderChildren(of: cell, into: &layout)
+        let lines = layout.content.trimmedLines.filter { $0.isEmpty == false }
+
+        let markers = layout.holdsFormattedLines ? [] : self.markers(of: cell)
+        return lines.map { line in
+            guard self.holdsText(line) else {
+                return line
+            }
+            return markers.reduce(line) { $1 + $0 + $1 }
+        }
     }
 
     /// A section of a data table, between two spanning rows. Its first row is
@@ -842,11 +967,10 @@ extension HTMLToMarkdown {
     /// blocks: an email framework lays out whole columns in header cells and
     /// sets their weight back in a stylesheet this converter does not read.
     fileprivate static func headerCell(_ element: Element, into layout: inout Layout) {
-        let weight = self.declarations(of: element)["font-weight"] ?? "bold"
-        let lighter = ["normal", "lighter", "100", "200", "300", "400", "500"]
+        let isBold = self.declarations(of: element)["font-weight"].flatMap { self.isBold($0) } ?? true
         guard
             self.holdsBlocks(element) == false,
-            lighter.contains(weight) == false
+            isBold
         else {
             self.block(element, into: &layout)
             return
@@ -889,7 +1013,8 @@ extension HTMLToMarkdown {
     /// A blank line stands where a browser leaves visible space, from 3pt up,
     /// and margin and padding both leave it: React Email zeroes its margins
     /// and spaces its paragraphs with padding. Without a style, a `p` has the
-    /// browser's margin of one line above and below and every other block
+    /// browser's margin of one line above and below, and so has a list, which
+    /// is laid out as blocks where it shows no bullets; every other block has
     /// none. Outlook's `Mso…` paragraphs are the exception, because Word
     /// zeroes their margins in a stylesheet this converter does not read.
     ///
@@ -900,7 +1025,8 @@ extension HTMLToMarkdown {
         let classes = ((try? element.className()) ?? "").split(separator: " ")
         let isParagraph = element.tagName() == "p"
         let isWordParagraph = isParagraph && classes.contains { $0.hasPrefix("Mso") }
-        let defaultMargin = (isParagraph && isWordParagraph == false) ? 12.0 : 0.0
+        let isList = ["ul", "ol"].contains(element.tagName())
+        let defaultMargin = (isParagraph && isWordParagraph == false) || isList ? 12.0 : 0.0
 
         let box = self.box(self.declarations(of: element))
         let top = (box.marginTop ?? defaultMargin) + (box.paddingTop ?? 0)

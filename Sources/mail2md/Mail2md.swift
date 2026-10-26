@@ -12,7 +12,7 @@ import Foundation
 struct Mail2md: Equatable {
     static let appname = "mail2md"
     static let abstract = "Convert .eml files to Markdown with YAML frontmatter."
-    static let version = "1.4.0"
+    static let version = "1.5.0"
 
     // What each option does is said once, in `helpPage`.
     var output: String? = nil

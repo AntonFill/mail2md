@@ -75,6 +75,8 @@ struct HTMLToMarkdownTests {
         ("<a href=\"http://www.example.com/\">www.example.com</a>", "www.example.com"),
         ("<a href=\"https://example.com\">https://example.com/</a>", "https://example.com/"),
         ("<a href=\"mailto:jane@example.com\">jane@example.com</a>", "jane@example.com"),
+        ("<a href=\"http://www.example.com/\"><span style=\"font-weight:bold\">www.example.com</span></a>", "**www.example.com**"),
+        ("<a href=\"http://www.example.com/\"><b>www.example.com</b></a>", "**www.example.com**"),
     ])
     func writesALinkThatShowsItsOwnAddressAsText(html: String, expected: String) {
         #expect(HTMLToMarkdown.convert(html) == expected)
@@ -214,6 +216,75 @@ struct EmphasisTests {
 
         #expect(HTMLToMarkdown.convert(html) == "- Punkt\n\n**Fettdruck**")
     }
+
+    /// An email framework sets a name or an amount in bold through the style
+    /// of a `div` or a `span` rather than with `b`, and a browser shows it
+    /// bold all the same: from a weight of 600 up, and `bold` and `bolder`.
+    @Test(arguments: [
+        ("<div style=\"font-size:16px;font-weight:bold;color:#333333\">Jane Doe</div><div>Zeile</div>", "**Jane Doe**\nZeile"),
+        ("<div><span>Prämie pro Monat CHF</span> <span style=\"font-size:28px;font-weight:bold\"> 329.35</span></div>", "Prämie pro Monat CHF **329.35**"),
+        ("<a href=\"https://example.com\" style=\"color:#ffffff;font-weight:700\">Startseite</a>", "**[Startseite](https://example.com)**"),
+        ("<span style=\"font-weight: bolder\">Hinweis</span>", "**Hinweis**"),
+        ("<span style=\"font-weight:600!important\">Hinweis</span>", "**Hinweis**"),
+        ("<b style=\"font-weight:inherit\">Hinweis</b>", "**Hinweis**"),
+    ])
+    func boldsWhatItsStyleSetsBold(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// A weight below 600 shows no bold, also where the style sets it on a
+    /// `b`: the style wins over the tag, as in a browser.
+    @Test(arguments: [
+        "<span style=\"font-weight:599\">mager</span>",
+        "<span style=\"font-weight:normal\">mager</span>",
+        "<span style=\"font-weight:lighter\">mager</span>",
+        "<b style=\"font-weight:400\">mager</b>",
+        "<strong style=\"font-weight: normal\">mager</strong>",
+    ])
+    func leavesALighterWeightPlain(html: String) {
+        #expect(HTMLToMarkdown.convert(html) == "mager")
+    }
+
+    /// The same for italics: a style that slants the text, and one that sets
+    /// an `i` upright.
+    @Test(arguments: [
+        ("<p style=\"margin-top: 0px; margin-bottom: 12px; font-style: italic;\">Alternativ mit dem Code abrufen.</p>", "*Alternativ mit dem Code abrufen.*"),
+        ("<span style=\"font-style:oblique 10deg\">schräg</span>", "*schräg*"),
+        ("<i style=\"font-style:normal\">gerade</i>", "gerade"),
+        ("<span style=\"font-weight:bold;font-style:italic\">beides</span>", "***beides***"),
+    ])
+    func italicizesWhatItsStyleSetsItalic(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// Bold from a style meets bold from a tag as two `b` meet.
+    @Test func joinsBoldFromAStyleWithBoldFromATag() {
+        let html = "<b>Umwelt</b><span style=\"font-weight:bold\">abgabe</span>"
+
+        #expect(HTMLToMarkdown.convert(html) == "**Umweltabgabe**")
+    }
+
+    /// Emphasis from a style counts as emphasis around the elements inside
+    /// it, and the other way round.
+    @Test(arguments: [
+        ("<div style=\"font-weight:bold\">Alle <b>Termine</b> im Überblick</div>", "**Alle Termine im Überblick**"),
+        ("<b>Alle <span style=\"font-weight:700\">Termine</span> im Überblick</b>", "**Alle Termine im Überblick**"),
+        ("<p style=\"font-style:italic\">Ganz <i>schräg</i></p>", "*Ganz schräg*"),
+    ])
+    func setsNoMarkersInsideStyledEmphasisOfItsOwnKind(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// Markers around each line of a list or a heading would break it, so
+    /// emphasis around one sets none.
+    @Test(arguments: [
+        ("<div style=\"font-weight:bold\"><ul><li>Punkt</li></ul></div>", "- Punkt"),
+        ("<b><ul><li>Punkt</li></ul></b>", "- Punkt"),
+        ("<h2 style=\"font-weight:bold\">Titel</h2>", "## Titel"),
+    ])
+    func setsNoMarkersAroundABlockMarkdownMarks(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
 }
 
 // MARK: -
@@ -318,6 +389,35 @@ struct BlockLayoutTests {
         let html = "<div>Vorher</div><ul><li>Punkt</li></ul><div>Dazwischen</div><blockquote>Zitat</blockquote><div>Danach</div><hr><div>Ende</div>"
 
         #expect(HTMLToMarkdown.convert(html) == "Vorher\n\n- Punkt\n\nDazwischen\n\n> Zitat\n\nDanach\n\n---\n\nEnde")
+    }
+
+    /// A list its style shows without bullets is a stack of lines to a
+    /// reader, spaced as its style spaces it.
+    @Test(arguments: ["list-style:none", "list-style-type: none", "list-style: none outside"])
+    func readsAListWithoutMarkersAsLines(style: String) {
+        let html = """
+            <div>Hausarztmodell</div><ul style="padding:0;margin:0;\(style)">\
+            <li><span>Franchise: CHF 300.–</span></li><li><span>Unfalldeckung: Nein</span></li></ul><div>Danach</div>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "Hausarztmodell\nFranchise: CHF 300.–\nUnfalldeckung: Nein\nDanach")
+    }
+
+    /// Without a margin of its own, such a list has the browser's, a line
+    /// above and below, and an ordered one loses its numbers as well.
+    @Test func spacesAListWithoutMarkersAsABrowserDoes() {
+        let html = "<div>Vorher</div><ol style=\"list-style-type:none\"><li>Eins</li><li>Zwei</li></ol><div>Danach</div>"
+
+        #expect(HTMLToMarkdown.convert(html) == "Vorher\n\nEins\nZwei\n\nDanach")
+    }
+
+    /// `none` in the shorthand is the bullet's picture where a type stands
+    /// beside it, and the bullet stays.
+    @Test(arguments: ["list-style: square none", "list-style-type: disc"])
+    func keepsTheMarkersOfAListThatShowsThem(style: String) {
+        let html = "<ul style=\"\(style)\"><li>Eins</li><li>Zwei</li></ul>"
+
+        #expect(HTMLToMarkdown.convert(html) == "- Eins\n- Zwei")
     }
 
     @Test func keepsTheEmptyLinesInsideAQuote() {
@@ -499,6 +599,16 @@ struct TableTests {
             """
 
         #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// A cell of data whose style sets it bold, the total of a receipt.
+    @Test func boldsACellOfDataItsStyleSetsBold() {
+        let html = """
+            <table><tr><td>Kabel</td><td>5.00</td></tr>\
+            <tr><td style="font-weight:bold">Total</td><td style="font-weight:bold">5.00</td></tr></table>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "|  |  |\n|---|---|\n| Kabel | 5.00 |\n| **Total** | **5.00** |")
     }
 
     @Test func escapesPipesAndKeepsLineBreaksInACell() {
