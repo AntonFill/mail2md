@@ -496,6 +496,23 @@ struct AttachmentsTests {
         #expect(message.body == "Hallo Anton, im Anhang finden Sie die **Unterlagen**.")
     }
 
+    /// Apple Mail continues a long or non-ASCII name over several parameters
+    /// (RFC 2231). Until 1.5.0 a `;` inside the quotes cut the name short, a
+    /// decomposed umlaut came out as the content type's stand-in `u_`, and a
+    /// name continued in the content type alone was `unnamed`.
+    @Test func readsNamesContinuedOverSeveralParameters() {
+        let names = EMLParser().parse(continuedNamesEML).attachmentNames
+
+        #expect(names == [
+            "2026.08.21 Eintrittsformular (Muster; signed am 01.09.2026).pdf",
+            "2021.09.08 Anmeldung Zu\u{0308}rich (signed).pdf",
+            "Urkunde Mu\u{0308}nchen.pdf",
+            "Programm fu_r den Herbst.pdf",
+        ])
+        // The umlaut stays decomposed, the way the mail writes it.
+        #expect(names.count == 4 && names[2].unicodeScalars.contains("\u{0308}"))
+    }
+
     @Test func listsNoAttachmentsForSinglePartMail() {
         #expect(EMLParser().parse(simpleEML).attachments.isEmpty)
     }

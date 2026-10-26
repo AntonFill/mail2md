@@ -74,24 +74,204 @@ struct ContentType {
 /// `Content-Type` and `Content-Disposition`) into its leading value and a
 /// parameter map. Value and keys are lowercased; quoted parameter values are
 /// unwrapped.
+///
+/// A `;` inside quotes belongs to the value (RFC 2045). A value continued over
+/// several parameters, `name*0`, `name*1`, or percent-encoded in a charset of
+/// its own, `name*=utf-8''…` (RFC 2231), is joined and decoded, and it stands
+/// under its plain key in place of a plain value beside it: Apple Mail writes
+/// every long or non-ASCII filename that way, with an ASCII stand-in such as
+/// `Mu_nchen` as the plain `name`. Until 1.5.0 neither was read, so a name with
+/// a `;` was cut short at it and a name with an umlaut kept the stand-in
+/// (4 attachments in 2 of 648 archive mails, measured 2026-10-26).
 func parseHeaderParameters(_ raw: String) -> (value: String, parameters: [String: String]) {
-    let segments = raw.components(separatedBy: ";")
+    let segments = splitParameters(raw)
     let value = segments[0].trimmingCharacters(in: .whitespaces).lowercased()
 
     var parameters: [String: String] = [:]
+    var sections: [String: [ParameterSection]] = [:]
     for segment in segments.dropFirst() {
         guard let equals = segment.firstIndex(of: "=") else {
             continue
         }
         let key = segment[..<equals].trimmingCharacters(in: .whitespaces).lowercased()
-        var paramValue = segment[segment.index(after: equals)...].trimmingCharacters(in: .whitespaces)
-        if paramValue.hasPrefix("\"") && paramValue.hasSuffix("\"") && paramValue.count >= 2 {
-            paramValue = String(paramValue.dropFirst().dropLast())
+        let paramValue = unquotedParameter(segment[segment.index(after: equals)...].trimmingCharacters(in: .whitespaces))
+
+        if let section = ParameterSection(key: key, value: paramValue) {
+            sections[section.name, default: []].append(section)
         }
-        parameters[key] = paramValue
+        else {
+            parameters[key] = paramValue
+        }
+    }
+
+    for (name, nameSections) in sections {
+        if let joined = joinedParameter(nameSections) {
+            parameters[name] = joined
+        }
     }
 
     return (value, parameters)
+}
+
+/// The segments of a parameterized header, split at every `;` outside a
+/// quoted value. Only a value that opens with a quote is quoted, as the
+/// grammar has it, so a stray quote inside a bare value cannot swallow the
+/// parameters after it.
+private func splitParameters(_ raw: String) -> [String] {
+    var segments: [String] = []
+    var segment = ""
+    var opensValue = false
+    var isQuoted = false
+    var isEscaped = false
+
+    for character in raw {
+        if isQuoted {
+            if isEscaped {
+                isEscaped = false
+            }
+            else if character == "\\" {
+                isEscaped = true
+            }
+            else if character == "\"" {
+                isQuoted = false
+            }
+        }
+        else if character == ";" {
+            segments.append(segment)
+            segment = ""
+            opensValue = false
+            continue
+        }
+        else if character == "=" {
+            opensValue = true
+        }
+        else if opensValue, character != " ", character != "\t" {
+            opensValue = false
+            isQuoted = character == "\""
+        }
+        segment.append(character)
+    }
+    segments.append(segment)
+
+    return segments
+}
+
+/// A parameter value without the quotes around it, `\"` and `\\` resolved.
+/// Any other backslash stays: a Windows path some mailers send unescaped would
+/// otherwise lose its separators.
+private func unquotedParameter(_ value: String) -> String {
+    guard
+        value.count >= 2,
+        value.hasPrefix("\""),
+        value.hasSuffix("\"")
+    else {
+        return value
+    }
+
+    var result = ""
+    var isEscaped = false
+    for character in value.dropFirst().dropLast() {
+        if isEscaped {
+            isEscaped = false
+            if character != "\"", character != "\\" {
+                result.append("\\")
+            }
+        }
+        else if character == "\\" {
+            isEscaped = true
+            continue
+        }
+        result.append(character)
+    }
+    if isEscaped {
+        result.append("\\")
+    }
+    return result
+}
+
+/// One section of a parameter in RFC 2231's form: `name*` (the whole value,
+/// extended), `name*0`, `name*1`, … (a continuation as it stands), or `name*0*`,
+/// `name*1*`, … (a continuation, extended). An extended section is
+/// percent-encoded, and the first one names its charset: `utf-8''Gr%C3%BC%C3%9Fe`.
+private struct ParameterSection {
+    let name: String
+    let number: Int
+    let isExtended: Bool
+    let value: String
+
+    init?(key: String, value: String) {
+        guard let star = key.firstIndex(of: "*") else {
+            return nil
+        }
+        let suffix = key[key.index(after: star)...]
+
+        self.name = String(key[..<star])
+        self.value = value
+        if suffix.isEmpty {
+            self.number = 0
+            self.isExtended = true
+            return
+        }
+
+        self.isExtended = suffix.hasSuffix("*")
+        guard let number = Int(self.isExtended ? suffix.dropLast() : suffix) else {
+            return nil
+        }
+        self.number = number
+    }
+}
+
+/// The value the sections of one parameter spell out: in the order of their
+/// numbers, the extended ones percent-decoded and read in the charset the
+/// first section names. Nil where they do not hold together, a number missing
+/// or bytes that are no text in their charset, so the plain value stays.
+private func joinedParameter(_ sections: [ParameterSection]) -> String? {
+    let ordered = sections.sorted { $0.number < $1.number }
+    guard ordered.map({ $0.number }) == Array(0..<ordered.count) else {
+        return nil
+    }
+
+    var charset: String?
+    var bytes: [UInt8] = []
+    for section in ordered {
+        guard section.isExtended else {
+            bytes += Array(section.value.utf8)
+            continue
+        }
+
+        var encoded = Substring(section.value)
+        if section.number == 0 {
+            let pieces = section.value.split(separator: "'", maxSplits: 2, omittingEmptySubsequences: false)
+            if pieces.count == 3 {
+                charset = String(pieces[0])
+                encoded = pieces[2]
+            }
+        }
+        bytes += percentDecoded(encoded)
+    }
+
+    return decodeText(bytes, encoding: stringEncoding(for: charset))
+}
+
+/// The bytes a percent-encoded text stands for. A `%` without two hex digits
+/// after it stands for itself.
+private func percentDecoded(_ text: Substring) -> [UInt8] {
+    let input = Array(text.utf8)
+    var bytes: [UInt8] = []
+    var index = 0
+    while index < input.count {
+        if input[index] == 0x25,  // '%'
+           index + 2 < input.count,
+           let high = hexValue(input[index + 1]),
+           let low = hexValue(input[index + 2]) {
+            bytes.append(UInt8(high << 4 | low))
+            index += 3
+            continue
+        }
+        bytes.append(input[index])
+        index += 1
+    }
+    return bytes
 }
 
 // MARK: - Content-Type
@@ -110,9 +290,9 @@ func parseContentType(_ raw: String?) -> ContentType {
 // MARK: - Content-Disposition
 
 /// Parses a `Content-Disposition` value (e.g. `attachment; filename="cv.pdf"`)
-/// into its disposition type and, if present, the RFC 2047-decoded filename.
-/// Returns an empty type when the header is absent. (RFC 2231 extended
-/// `filename*=` parameters are out of scope.)
+/// into its disposition type and, if present, the filename: continued or
+/// extended after RFC 2231, or RFC 2047-decoded. Returns an empty type when the
+/// header is absent.
 func parseContentDisposition(_ raw: String?) -> (type: String, filename: String?) {
     guard let raw, raw.isEmpty == false else {
         return ("", nil)

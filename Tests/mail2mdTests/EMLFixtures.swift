@@ -316,6 +316,62 @@ let punctuationNameEML = """
     --b--\r
     """
 
+/// Attachment names the way Apple Mail writes them when they are long or not
+/// ASCII: continued over several parameters (RFC 2231), in the content type
+/// plain and in the disposition percent-encoded in UTF-8, with a decomposed
+/// umlaut, while the content type's `name` gets an ASCII stand-in or is
+/// continued itself. The first name holds a `;` inside its quotes, which cut
+/// it short until 1.5.0 (an admission form, 2026-10-25).
+let continuedNamesEML = """
+    From: Anton Fillmann <anton@example.com>\r
+    To: Praxis <praxis@example.com>\r
+    Subject: Formulare\r
+    Date: Tue, 01 Sep 2026 10:00:00 +0200\r
+    MIME-Version: 1.0\r
+    Content-Type: multipart/mixed; boundary="b"\r
+    \r
+    --b\r
+    Content-Type: text/plain; charset=utf-8\r
+    \r
+    Anbei die Formulare.\r
+    --b\r
+    Content-Disposition: inline;\r
+    \tfilename*0="2026.08.21 Eintrittsformular (Muster; signed am 0";\r
+    \tfilename*1="1.09.2026).pdf"\r
+    Content-Type: application/pdf;\r
+    \tname="2026.08.21 Eintrittsformular (Muster; signed am 01.09.2026).pdf"\r
+    Content-Transfer-Encoding: base64\r
+    \r
+    JVBERi0xLjQK\r
+    --b\r
+    Content-Type: application/pdf;\r
+    \tname*0="2021.09.08 Anmeldung Zu_rich (signed).";\r
+    \tname*1=pdf\r
+    Content-Disposition: attachment;\r
+    \tfilename*0*=utf-8''2021.09.08%20Anmeldung%20Zu%CC%88rich%20%28signed%29;\r
+    \tfilename*1*=.pdf\r
+    Content-Transfer-Encoding: base64\r
+    \r
+    JVBERi0xLjQK\r
+    --b\r
+    Content-Type: application/pdf;\r
+    \tname="Urkunde Mu_nchen.pdf"\r
+    Content-Disposition: inline;\r
+    \tfilename*=utf-8''Urkunde%20Mu%CC%88nchen.pdf\r
+    Content-Transfer-Encoding: base64\r
+    \r
+    JVBERi0xLjQK\r
+    --b\r
+    Content-Type: application/pdf;\r
+    \tname*0="Programm f";\r
+    \tname*1="u_r den Herbst.pdf"\r
+    Content-Transfer-Encoding: base64\r
+    Content-Disposition: attachment\r
+    \r
+    JVBERi0xLjQK\r
+    --b--\r
+    """
+
 /// The shape of the mail that showed `cc` missing (2026-09-08): several
 /// recipients in `To` and in `Cc`, the `Cc` header folded onto a second line,
 /// and an RFC 2047-encoded display name in the Outlook order, surname first.

@@ -168,6 +168,58 @@ struct Windows1252Tests {
 
 // MARK: -
 
+/// The parameters of `Content-Type` and `Content-Disposition`: RFC 2045, a
+/// `;` inside quotes belonging to the value, and RFC 2231, a value continued
+/// over several parameters or percent-encoded in a charset of its own.
+struct HeaderParametersTests {
+
+    @Test func keepsASemicolonInsideQuotes() {
+        let parsed = parseHeaderParameters(#"application/pdf; name="Formular (Muster; signed).pdf"; x-apple-part-url=1"#)
+
+        #expect(parsed.value == "application/pdf")
+        #expect(parsed.parameters == ["name": "Formular (Muster; signed).pdf", "x-apple-part-url": "1"])
+    }
+
+    /// A quoted value resolves `\"` and `\\`. Any other backslash stays, as in
+    /// a Windows path some mailers write unescaped.
+    @Test func resolvesTheEscapesOfAQuotedValue() {
+        #expect(parseHeaderParameters(#"attachment; filename="Der \"Plan\" \\ C:\Daten.pdf""#).parameters["filename"] == #"Der "Plan" \ C:\Daten.pdf"#)
+    }
+
+    @Test func joinsContinuationsInTheOrderOfTheirNumbers() {
+        let parsed = parseHeaderParameters(#"application/pdf; name*1=pdf; name*0="2021.09.08 Anmeldung (signed).""#)
+
+        #expect(parsed.parameters["name"] == "2021.09.08 Anmeldung (signed).pdf")
+    }
+
+    @Test func decodesAnExtendedValueInTheCharsetItNames() {
+        let continued = parseHeaderParameters("attachment; filename*0*=utf-8''Gr%C3%BC%C3%9Fe%20an; filename*1*=%20M%C3%BCller.pdf")
+        let single = parseHeaderParameters("attachment; filename*=iso-8859-1'de'Pr%FCfung%25.pdf")
+
+        #expect(continued.parameters["filename"] == "Grüße an Müller.pdf")
+        #expect(single.parameters["filename"] == "Prüfung%.pdf")
+    }
+
+    /// Apple Mail writes `Mu_nchen` as the plain stand-in for `München`, which
+    /// stands in the extended value, decomposed.
+    @Test func prefersTheExtendedValueOverAPlainOne() {
+        let name = parseHeaderParameters("inline; filename=\"Mu_nchen.pdf\"; filename*=utf-8''Mu%CC%88nchen.pdf").parameters["filename"]
+
+        #expect(name.map { Array($0.unicodeScalars) } == Array("Mu\u{0308}nchen.pdf".unicodeScalars))
+    }
+
+    /// Continuations that do not hold together leave the plain value, as it
+    /// stood before 1.5.0: a gap in their numbers, or bytes that are no text
+    /// in their charset.
+    @Test func keepsThePlainValueWhereTheContinuationsDoNotHold() {
+        #expect(parseHeaderParameters(#"attachment; filename="a.pdf"; filename*0="x"; filename*2="y""#).parameters["filename"] == "a.pdf")
+        #expect(parseHeaderParameters("attachment; filename=\"a.pdf\"; filename*=utf-8''%FF.pdf").parameters["filename"] == "a.pdf")
+        #expect(parseHeaderParameters("attachment; filename*1=\"x.pdf\"").parameters["filename"] == nil)
+    }
+}
+
+// MARK: -
+
 /// An address header as a reader wants it. What a mail program needs and a
 /// reader does not goes: the quotes around a plain name, the brackets around
 /// an address without one, and a name that is only the address again, which
