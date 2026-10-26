@@ -82,6 +82,26 @@ struct MarkdownRendererTests {
         #expect(
             markdown.contains("attachments: [\"Lebenslauf.pdf\", \"Prüfung.pdf\", \"Foto.png\"]\n"))
     }
+
+    /// A value is written so that YAML reads it back as it is: a backslash
+    /// and a quote escaped, a control character or a line separator as its
+    /// escape, a tab as it stands. Until 1.5.0 only the quote was escaped,
+    /// and a backslash made the whole frontmatter unreadable: YAML reads the
+    /// `\U` of `C:\Users` as the start of an escape.
+    @Test(arguments: [
+        ("Pfad C:\\Users\\Muster \"neu\"", "\"Pfad C:\\\\Users\\\\Muster \\\"neu\\\"\""),
+        ("Zeile\r\neins\u{1}\u{7F}\u{85}\u{2028}\u{2029}", "\"Zeile\\r\\neins\\x01\\x7F\\N\\L\\P\""),
+        ("Tab\tbleibt, ü und 😀 auch", "\"Tab\tbleibt, ü und 😀 auch\""),
+    ])
+    func writesAValueYAMLReadsBackAsItIs(value: String, expected: String) {
+        #expect(MarkdownRenderer().quoted(value) == expected)
+    }
+
+    @Test func escapesABackslashInTheSubject() {
+        let markdown = MarkdownRenderer().render(EMLParser().parse("Subject: Ablage unter C:\\Daten\r\n\r\nBody"))
+
+        #expect(markdown.contains("subject: \"Ablage unter C:\\\\Daten\"\n"))
+    }
 }
 
 // MARK: -

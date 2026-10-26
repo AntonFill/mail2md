@@ -129,9 +129,37 @@ extension MarkdownRenderer {
         return self._dateFormatter.string(from: date)
     }
 
-    /// Double-quotes a value for safe use in YAML frontmatter.
+    /// Double-quotes a value for YAML frontmatter, so that YAML reads it back
+    /// as it is: a quote and a backslash escaped, a character YAML does not
+    /// take as it stands, a control character or a line or paragraph
+    /// separator, written as its escape, and everything else, a tab included,
+    /// as it stands. Until 1.5.0 only the quote was escaped, and a backslash
+    /// made the whole frontmatter unreadable: YAML reads the `\U` of `C:\Users`
+    /// as the start of an escape.
     func quoted(_ value: String) -> String {
-        let escaped = value.replacingOccurrences(of: "\"", with: "\\\"")
+        var escaped = ""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"", "\\":
+                escaped += "\\" + String(scalar)
+            case "\t":
+                escaped += "\t"
+            case "\n":
+                escaped += "\\n"
+            case "\r":
+                escaped += "\\r"
+            case "\u{85}":
+                escaped += "\\N"
+            case "\u{2028}":
+                escaped += "\\L"
+            case "\u{2029}":
+                escaped += "\\P"
+            case "\u{0}"..."\u{1F}", "\u{7F}"..."\u{9F}":
+                escaped += String(format: "\\x%02X", scalar.value)
+            default:
+                escaped.unicodeScalars.append(scalar)
+            }
+        }
         return "\"\(escaped)\""
     }
 }
