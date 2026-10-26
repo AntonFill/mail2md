@@ -301,17 +301,19 @@ struct TagTests {
         (">#zitiert", ">\\#zitiert"),
         ("| #zelle | #1a |", "| \\#zelle | \\#1a |"),
         ("*#kursiv* und ~~#gestrichen~~", "*\\#kursiv* und ~~\\#gestrichen~~"),
+        ("_#unterstrich_", "_\\#unterstrich_"),
+        ("a #1/a b #1-a c #1_a", "a \\#1/a b \\#1-a c \\#1_a"),
     ])
     func escapesWhatObsidianReadsAsATag(body: String, expected: String) {
         #expect(Self.renderer.escapingTags(body) == expected)
     }
 
     @Test(arguments: [
-        "Nummer #123",
+        "Nummer #123 und Jahr #2026",
         "C# und x#y",
         "(#inKlammer) und \"#inQuote\" und Satz.#direkt",
         "\\#schon maskiert",
-        "Mit `#code` darin",
+        "Mit `#code` und `a #imcode` darin",
         "# Überschrift",
         "## Unterüberschrift",
         "[Deutsch](#German)",
