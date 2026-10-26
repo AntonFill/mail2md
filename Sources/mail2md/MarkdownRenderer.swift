@@ -7,6 +7,14 @@
 
 import Foundation
 
+/// The Markdown a note is written in. Plain Markdown is read anywhere;
+/// Obsidian's adds syntax only Obsidian shows, a box the mail sets apart
+/// written as a callout rather than between rules.
+enum OutputFormat: String, CaseIterable {
+    case markdown
+    case obsidian
+}
+
 /// Renders an `EmailMessage` as Markdown with YAML frontmatter.
 ///
 /// Frontmatter follows the EMAIL note template

@@ -23,14 +23,19 @@ import SwiftSoup
 /// is embedded in its place. Each picture from the mail that a reader would
 /// see is handed back, so the run can name what the note leaves out.
 ///
+/// A box the mail sets apart, framed or on a colour of its own, stays apart
+/// where it is a card, between rules or as an Obsidian callout, and a button
+/// in light text on a dark colour is bold. Colours count for nothing else.
+///
 /// The goal is readable, AI-ready Markdown, not a rendering: no fonts, no
-/// colours, no stylesheet. The one rule taken from outside the element is a
-/// rule about a known producer: Word zeroes the margins of its `Mso…`
-/// paragraphs in a stylesheet, so an Outlook paragraph is a line.
+/// stylesheet. The two rules taken from outside the element are rules about
+/// a known producer: Word zeroes the margins of its `Mso…` paragraphs in a
+/// stylesheet, so an Outlook paragraph is a line, and MJML sets the widths of
+/// its columns there, so its class names say which stand side by side.
 enum HTMLToMarkdown {
 
-    static func convert(_ html: String) -> String {
-        return self.convert(html, imageNames: [:]).markdown
+    static func convert(_ html: String, format: OutputFormat = .markdown) -> String {
+        return self.convert(html, imageNames: [:], format: format).markdown
     }
 
     /// The Markdown, and the pictures from parts of the mail it shows, in
@@ -39,7 +44,8 @@ enum HTMLToMarkdown {
     /// `imageNames` holds the file each picture was written to, by the
     /// `Content-ID` its `cid:` address names. Such a picture is embedded where
     /// the `img` stood; every other one is left out, as it always was.
-    static func convert(_ html: String, imageNames: [String: String]) -> (markdown: String, images: [InlineImage]) {
+    /// `format` says how a box the mail sets apart is written.
+    static func convert(_ html: String, imageNames: [String: String], format: OutputFormat = .markdown) -> (markdown: String, images: [InlineImage]) {
         guard let body = try? SwiftSoup.parse(self.joiningSurrogateHalves(html)).body() else {
             return (html, [])
         }
@@ -53,6 +59,7 @@ enum HTMLToMarkdown {
                 .select("script, style, head, title, meta, link, noscript, svg")
                 .remove()
             try self.markFiles(in: body, imageNames: imageNames)
+            try self.markBoxes(in: body, format: format)
         }
         catch {
             return (html, [])
@@ -222,6 +229,316 @@ extension HTMLToMarkdown {
     }
 }
 
+// MARK: - Boxes
+extension HTMLToMarkdown {
+
+    /// The attributes the walk finds boxes by. A card that may be set apart
+    /// carries the format to write it in, a button only the mark.
+    fileprivate static let boxAttribute = "data-mail2md-box"
+    fileprivate static let buttonAttribute = "data-mail2md-button"
+
+    /// Marks the boxes a reader sees set apart, before the walk: a block
+    /// framed on all four sides or on a background of its own, a colour that
+    /// differs from the one behind it. Whether a box is a card or a button
+    /// depends on what it holds, and that is decided where it is laid out.
+    ///
+    /// A card is the outermost box, never one inside another, and never the
+    /// box holding the mail's last line, its footer (Anton's decision B,
+    /// 2026-10-26). A mail that lays all its text on a panel of a colour of
+    /// its own has that panel for its page, so the walk starts at the
+    /// innermost element holding all of the text. A button is any box on a
+    /// background of its own in light text on a darker colour.
+    fileprivate static func markBoxes(in body: Element, format: OutputFormat) throws {
+        let marked = try body.select("[\(self.boxAttribute)], [\(self.buttonAttribute)]")
+        for element in marked {
+            try element.removeAttr(self.boxAttribute)
+            try element.removeAttr(self.buttonAttribute)
+        }
+
+        var page = body
+        let bodyStyle = self.declarations(of: body)
+        var background = self.background(of: body, style: bodyStyle) ?? Color.white
+        var color = self.color(of: body, style: bodyStyle) ?? Color.black
+        while true {
+            let holders = page.getChildNodes().filter { self.showsText($0) }
+            guard
+                holders.count == 1,
+                let only = holders.first as? Element
+            else {
+                break
+            }
+            page = only
+            let style = self.declarations(of: only)
+            background = self.background(of: only, style: style).map { $0.over(background) } ?? background
+            color = self.color(of: only, style: style) ?? color
+        }
+
+        var footer = Set<ObjectIdentifier>()
+        var ancestor = self.lastText(in: body)?.parent()
+        while let element = ancestor {
+            footer.insert(ObjectIdentifier(element))
+            ancestor = element.parent()
+        }
+
+        try self.markBoxes(under: page, background: background, color: color, insideBox: false, footer: footer, format: format)
+    }
+
+    /// Columns MJML sets side by side are laid out as one, so a box inside
+    /// one of them is no card either, as one inside another box is not.
+    fileprivate static func markBoxes(under parent: Element, background: Color, color: Color, insideBox: Bool, footer: Set<ObjectIdentifier>, format: OutputFormat) throws {
+        let insideBox = insideBox || self.holdsColumns(parent)
+        let children = parent.children().array()
+        for child in children {
+            let style = self.declarations(of: child)
+            guard self.isHidden(child, style: style) == false else {
+                continue
+            }
+
+            let own = self.background(of: child, style: style).map { $0.over(background) }
+            let behind = own ?? background
+            let hasBackground = own.map { $0 != background } ?? false
+            let isBox = self.blockTags.contains(child.tagName()) && (hasBackground || self.hasFrame(style)) && self.showsText(child)
+
+            if isBox, insideBox == false, footer.contains(ObjectIdentifier(child)) == false {
+                try child.attr(self.boxAttribute, format.rawValue)
+            }
+            if isBox,
+               hasBackground,
+               let ink = self.textColor(in: child, inherited: color),
+               ink.luminance > behind.luminance {
+                try child.attr(self.buttonAttribute, "")
+            }
+
+            let ink = self.color(of: child, style: style) ?? color
+            try self.markBoxes(under: child, background: behind, color: ink, insideBox: insideBox || isBox, footer: footer, format: format)
+        }
+    }
+
+    /// A box `markBoxes` marked, laid out on its own first. A card of more
+    /// than one line under a title, a first line all in bold or a heading,
+    /// is set apart from the text around it; a button of one line that is no
+    /// link is bold; anything else is written as it would have been.
+    fileprivate static func renderBox(_ element: Element, into layout: inout Layout) {
+        var inner = Layout()
+        self.renderEmphasized(element, into: &inner)
+        let lines = inner.content.trimmedLines
+        let filled = lines.filter { $0.isEmpty == false }
+
+        if let format = OutputFormat(rawValue: (try? element.attr(self.boxAttribute)) ?? ""),
+           filled.count >= 2,
+           let title = self.title(of: lines[0]) {
+            self.setApart(inner, lines: lines, title: title, format: format, into: &layout)
+            return
+        }
+        if element.hasAttr(self.buttonAttribute),
+           filled.count == 1,
+           inner.holdsFormattedLines == false,
+           self.holdsLink(element) == false {
+            layout.place(inner.content) { line in
+                return "**" + line.replacingOccurrences(of: "**", with: "") + "**"
+            }
+            return
+        }
+        layout.replay(inner.operations)
+    }
+
+    /// The title a card's first line gives it: the line where all of it is
+    /// bold, without the markers, or a heading's text. Nil for any other line.
+    fileprivate static func title(of line: String) -> String? {
+        if let heading = line.wholeMatch(of: /#{1,6} (.+)/) {
+            return String(heading.1)
+        }
+        guard
+            line.count > 4,
+            line.hasPrefix(self.boldMarker),
+            line.hasSuffix(self.boldMarker)
+        else {
+            return nil
+        }
+
+        let text = line.dropFirst(2).dropLast(2)
+        return text.contains(self.boldMarker) ? nil : String(text)
+    }
+
+    /// A card set apart from the text around it: in Obsidian's format a
+    /// callout under its title, and in plain Markdown its lines as they are,
+    /// between two rules.
+    fileprivate static func setApart(_ card: Layout, lines: [String], title: String, format: OutputFormat, into layout: inout Layout) {
+        switch format {
+        case .obsidian:
+            let body = lines.dropFirst().map { $0.isEmpty ? ">" : "> " + $0 }
+            layout.gap(2)
+            layout.writeLines(["> [!quote] " + title] + body)
+            layout.gap(2)
+        case .markdown:
+            layout.gap(2)
+            layout.rule()
+            layout.gap(2)
+            layout.replay(card.operations)
+            layout.gap(2)
+            layout.rule()
+            layout.gap(2)
+        }
+    }
+
+    /// Whether a node shows text a reader sees, more than whitespace.
+    fileprivate static func showsText(_ node: Node) -> Bool {
+        if let text = node as? TextNode {
+            return text.getWholeText().unicodeScalars.contains { $0.properties.isWhitespace == false }
+        }
+        guard
+            let element = node as? Element,
+            self.isHidden(element) == false
+        else {
+            return false
+        }
+        return element.getChildNodes().contains { self.showsText($0) }
+    }
+
+    /// The last text a reader sees in a node.
+    fileprivate static func lastText(in node: Node) -> TextNode? {
+        if let text = node as? TextNode {
+            return self.showsText(text) ? text : nil
+        }
+        guard
+            let element = node as? Element,
+            self.isHidden(element) == false
+        else {
+            return nil
+        }
+
+        let children = element.getChildNodes().reversed()
+        for child in children {
+            if let text = self.lastText(in: child) {
+                return text
+            }
+        }
+        return nil
+    }
+
+    /// The colour of the first text a reader sees in a node, the colour of
+    /// the text around it unless an element on the way sets its own.
+    fileprivate static func textColor(in node: Node, inherited: Color) -> Color? {
+        if let text = node as? TextNode {
+            return self.showsText(text) ? inherited : nil
+        }
+        guard let element = node as? Element else {
+            return nil
+        }
+        let style = self.declarations(of: element)
+        guard self.isHidden(element, style: style) == false else {
+            return nil
+        }
+
+        let color = self.color(of: element, style: style) ?? inherited
+        let children = element.getChildNodes()
+        for child in children {
+            if let found = self.textColor(in: child, inherited: color) {
+                return found
+            }
+        }
+        return nil
+    }
+}
+
+// MARK: - Columns
+extension HTMLToMarkdown {
+
+    /// The width MJML gives a column on a wide screen, in percent, read off
+    /// its class, `mj-column-per-49`, a fraction with a dash for its point,
+    /// `mj-column-per-33-333333333333336`. The width itself stands in a
+    /// stylesheet, which this converter does not read. Nil for any other
+    /// element.
+    fileprivate static func columnWidth(of element: Element) -> Double? {
+        let prefix = "mj-column-per-"
+        let classes = ((try? element.className()) ?? "").split(separator: " ")
+        for name in classes where name.hasPrefix(prefix) {
+            return Double(name.dropFirst(prefix.count).replacingOccurrences(of: "-", with: "."))
+        }
+        return nil
+    }
+
+    /// Whether an element sets MJML columns side by side: two or more,
+    /// together no wider than the screen, and nothing beside them a reader
+    /// sees. Columns that each take the whole width stand one below the other.
+    fileprivate static func holdsColumns(_ element: Element) -> Bool {
+        let nodes = element.getChildNodes()
+        let widths = nodes.compactMap { ($0 as? Element).flatMap { self.columnWidth(of: $0) } }
+        guard
+            widths.count >= 2,
+            widths.reduce(0, +) <= 100.01
+        else {
+            return false
+        }
+
+        return nodes.allSatisfy { node in
+            return (node as? Element).flatMap { self.columnWidth(of: $0) } != nil || self.showsText(node) == false
+        }
+    }
+
+    /// Columns side by side, each laid out on its own. Where the columns
+    /// showing text hold as many lines as each other, more than one, they
+    /// pair up as a Markdown table (an insurer sets the old insurance beside
+    /// the new one); otherwise they stand one below the other, replayed as if
+    /// laid out in place.
+    fileprivate static func columns(of element: Element, into layout: inout Layout) {
+        var parts: [(node: Node, layout: Layout)] = []
+        let children = element.getChildNodes()
+        for child in children {
+            var part = Layout()
+            self.render(child, into: &part)
+            parts.append((child, part))
+        }
+
+        let columns = parts
+            .filter { ($0.node as? Element).flatMap { self.columnWidth(of: $0) } != nil }
+            .map { $0.layout }
+            .filter { $0.content.trimmedLines.isEmpty == false }
+        guard let table = self.table(ofColumns: columns) else {
+            for part in parts {
+                layout.replay(part.layout.operations)
+            }
+            return
+        }
+
+        layout.gap(2)
+        layout.writeLines(table)
+        layout.gap(2)
+    }
+
+    /// The lines of the table columns of as many lines pair up into, or nil
+    /// where they do not: fewer than two columns, a column holding a block
+    /// Markdown marks, a single line each, or lines of different counts. The
+    /// first lines are the header where each is all bold; otherwise the
+    /// header stays empty, as over a table of data.
+    fileprivate static func table(ofColumns columns: [Layout]) -> [String]? {
+        let lines = columns.map { $0.content.trimmedLines.filter { $0.isEmpty == false } }
+        guard
+            columns.count >= 2,
+            columns.allSatisfy({ $0.holdsFormattedLines == false }),
+            let count = lines.first?.count,
+            count >= 2,
+            lines.allSatisfy({ $0.count == count })
+        else {
+            return nil
+        }
+
+        let escape = { (cell: String) in
+            return cell.replacingOccurrences(of: "|", with: "\\|")
+        }
+        let titles = lines.map { self.title(of: $0[0]) }
+        let hasHeader = titles.allSatisfy { $0 != nil }
+        let header = hasHeader ? titles.map { escape($0 ?? "") } : Array(repeating: "", count: columns.count)
+
+        var table = [self.tableRow(header), "|" + Array(repeating: "---", count: columns.count).joined(separator: "|") + "|"]
+        let rows = hasHeader ? 1..<count : 0..<count
+        for row in rows {
+            table.append(self.tableRow(lines.map { escape($0[row]) }))
+        }
+        return table
+    }
+}
+
 // MARK: - Tree walking
 extension HTMLToMarkdown {
 
@@ -243,6 +560,11 @@ extension HTMLToMarkdown {
     ]
 
     fileprivate static func renderChildren(of node: Node, into layout: inout Layout) {
+        if let element = node as? Element, self.holdsColumns(element) {
+            self.columns(of: element, into: &layout)
+            return
+        }
+
         let children = node.getChildNodes()
         for child in children {
             self.render(child, into: &layout)
@@ -270,7 +592,12 @@ extension HTMLToMarkdown {
             layout.space()
         }
 
-        self.renderEmphasized(element, into: &layout)
+        if element.hasAttr(self.boxAttribute) || element.hasAttr(self.buttonAttribute) {
+            self.renderBox(element, into: &layout)
+        }
+        else {
+            self.renderEmphasized(element, into: &layout)
+        }
 
         if let gaps = frame.gaps {
             layout.gap(gaps.bottom)
@@ -996,6 +1323,11 @@ extension HTMLToMarkdown {
     /// alone, which shows a twin from a conditional comment instead, so every
     /// other client shows it; in the archive it hides a button that way.
     fileprivate static func isHidden(_ element: Element) -> Bool {
+        return self.isHidden(element, style: self.declarations(of: element))
+    }
+
+    /// The same, for an element whose style was read already.
+    fileprivate static func isHidden(_ element: Element, style: [String: String]) -> Bool {
         if element.hasAttr("hidden") {
             return true
         }
@@ -1004,7 +1336,6 @@ extension HTMLToMarkdown {
             return true
         }
 
-        let style = self.declarations(of: element)
         return style["display"] == "none" || style["visibility"] == "hidden"
     }
 
@@ -1194,6 +1525,74 @@ extension HTMLToMarkdown {
         let right = self.points(values.count >= 2 ? values[1] : values[0])
         let left = values.count >= 4 ? self.points(values[3]) : right
         return (left, right)
+    }
+
+    /// The background an element paints itself, from its style or else from
+    /// its `bgcolor`, or nil where the one behind it shows through: none set,
+    /// a picture alone, or a colour that lets everything through.
+    fileprivate static func background(of element: Element, style: [String: String]) -> Color? {
+        if let value = style["background-color"] ?? style["background"] {
+            let color = self.firstColor(in: value)
+            return (color?.alpha ?? 0) > 0 ? color : nil
+        }
+        guard element.hasAttr("bgcolor") else {
+            return nil
+        }
+
+        let attribute = ((try? element.attr("bgcolor")) ?? "").lowercased()
+        let color = Color(css: attribute) ?? Color(css: "#" + attribute)
+        return (color?.alpha ?? 0) > 0 ? color : nil
+    }
+
+    /// The first colour among the words of a `background` shorthand, past a
+    /// picture's address, which may hold a colour's name.
+    fileprivate static func firstColor(in value: String) -> Color? {
+        guard value.contains("(") else {
+            let words = value.split(whereSeparator: { $0.isWhitespace })
+            return words.lazy.compactMap { Color(css: String($0)) }.first
+        }
+
+        let words = value.replacing(/url\([^)]*\)/, with: "").matches(of: /#[0-9a-f]+|rgba?\([^)]*\)|[a-z]+/)
+        return words.lazy.compactMap { Color(css: String($0.output)) }.first
+    }
+
+    /// The colour an element sets its text in, from its style or else, for
+    /// `font`, from its attribute; nil where it keeps the one around it.
+    fileprivate static func color(of element: Element, style: [String: String]) -> Color? {
+        if let value = style["color"] {
+            return Color(css: value)
+        }
+        guard
+            element.tagName() == "font",
+            element.hasAttr("color")
+        else {
+            return nil
+        }
+
+        let attribute = ((try? element.attr("color")) ?? "").lowercased()
+        return Color(css: attribute) ?? Color(css: "#" + attribute)
+    }
+
+    /// Whether a border closes an element in on all four sides, a side's own
+    /// declaration winning over the shorthand.
+    fileprivate static func hasFrame(_ style: [String: String]) -> Bool {
+        let all = style["border"].map { self.isVisibleBorder($0) } ?? false
+        let sides = ["top", "right", "bottom", "left"]
+        return sides.allSatisfy { side in
+            return style["border-" + side].map { self.isVisibleBorder($0) } ?? all
+        }
+    }
+
+    /// Whether a `border` value draws a line: one with a style, no `none` or
+    /// `hidden`, and a width above zero. Without a style CSS draws none.
+    fileprivate static func isVisibleBorder(_ value: String) -> Bool {
+        let values = value.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        let styles = ["solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset"]
+        guard values.contains(where: { styles.contains($0) }) else {
+            return false
+        }
+        let width = values.lazy.compactMap { self.points($0) }.first ?? 1
+        return width > 0
     }
 }
 
@@ -1389,6 +1788,117 @@ extension HTMLToMarkdown {
     }
 }
 
+// MARK: - Colour
+
+/// A colour as CSS writes it, each channel from 0 to 1, with its opacity.
+fileprivate struct Color: Equatable {
+    let red: Double
+    let green: Double
+    let blue: Double
+    let alpha: Double
+
+    static let white = Color(red: 1, green: 1, blue: 1, alpha: 1)
+    static let black = Color(red: 0, green: 0, blue: 0, alpha: 1)
+
+    /// CSS's sixteen basic colours, and grey spelt with an e.
+    private static let names: [String: String] = [
+        "black": "000000", "silver": "c0c0c0", "gray": "808080", "grey": "808080",
+        "white": "ffffff", "maroon": "800000", "red": "ff0000", "purple": "800080",
+        "fuchsia": "ff00ff", "green": "008000", "lime": "00ff00", "olive": "808000",
+        "yellow": "ffff00", "navy": "000080", "blue": "0000ff", "teal": "008080",
+        "aqua": "00ffff", "transparent": "00000000",
+    ]
+
+    init(red: Double, green: Double, blue: Double, alpha: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.alpha = alpha
+    }
+
+    /// The colour a CSS value names: `#rgb` or `#rrggbb`, either with an
+    /// opacity, `rgb()` or `rgba()`, or a basic name. Nil for anything else,
+    /// a system colour or a variable among them.
+    init?(css value: String) {
+        let text = value.trimmingCharacters(in: .whitespaces).lowercased()
+        if let name = Color.names[text] {
+            self.init(hex: name)
+            return
+        }
+        if text.hasPrefix("#") {
+            self.init(hex: String(text.dropFirst()))
+            return
+        }
+        guard
+            text.hasPrefix("rgb"),
+            let arguments = text.wholeMatch(of: /rgba?\((.*)\)/)
+        else {
+            return nil
+        }
+
+        let numbers = arguments.1.matches(of: /[0-9.]+%?/).map { String($0.output) }
+        guard numbers.count >= 3 else {
+            return nil
+        }
+        let channels = numbers.prefix(3).compactMap { number in
+            return number.hasSuffix("%") ? Double(number.dropLast()).map { $0 / 100 } : Double(number).map { $0 / 255 }
+        }
+        let alpha = numbers.count >= 4 ? (numbers[3].hasSuffix("%") ? Double(numbers[3].dropLast()).map { $0 / 100 } : Double(numbers[3])) : 1
+        guard
+            channels.count == 3,
+            let alpha
+        else {
+            return nil
+        }
+        self.init(red: channels[0], green: channels[1], blue: channels[2], alpha: alpha)
+    }
+
+    /// The colour of hexadecimal digits, three or six, with one or two more
+    /// for the opacity.
+    private init?(hex digits: String) {
+        guard digits.allSatisfy({ $0.isHexDigit }) else {
+            return nil
+        }
+
+        let pairs: [String]
+        switch digits.count {
+        case 3, 4:
+            pairs = digits.map { String([$0, $0]) }
+        case 6, 8:
+            pairs = stride(from: 0, to: digits.count, by: 2).map { offset in
+                let start = digits.index(digits.startIndex, offsetBy: offset)
+                return String(digits[start..<digits.index(start, offsetBy: 2)])
+            }
+        default:
+            return nil
+        }
+
+        let values = pairs.compactMap { UInt8($0, radix: 16) }.map { Double($0) / 255 }
+        self.init(red: values[0], green: values[1], blue: values[2], alpha: values.count == 4 ? values[3] : 1)
+    }
+
+    /// The colour seen where this one lies over `background`.
+    func over(_ background: Color) -> Color {
+        guard self.alpha < 1 else {
+            return self
+        }
+
+        let mix = { (front: Double, back: Double) in
+            return front * self.alpha + back * (1 - self.alpha)
+        }
+        return Color(red: mix(self.red, background.red), green: mix(self.green, background.green), blue: mix(self.blue, background.blue), alpha: 1)
+    }
+
+    /// How light the colour looks, from 0 for black to 1 for white, as WCAG
+    /// computes relative luminance.
+    var luminance: Double {
+        let linear = { (channel: Double) in
+            return channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(self.red) + 0.7152 * linear(self.green) + 0.0722 * linear(self.blue)
+    }
+}
+
 // MARK: - Layout
 
 /// The Markdown being written, line by line.
@@ -1412,6 +1922,7 @@ fileprivate struct Layout {
         case space(nonBreaking: Bool)
         case lineBreak
         case writeLines([String])
+        case rule
     }
 
     /// A block laid out on its own, for an element to wrap, prefix or flatten.
@@ -1528,7 +2039,7 @@ fileprivate struct Layout {
             switch operation {
             case .write:
                 return true
-            case .writeLines:
+            case .writeLines, .rule:
                 return false
             default:
                 continue
@@ -1541,10 +2052,12 @@ fileprivate struct Layout {
     /// table, a code fence, a heading or a rule.
     var holdsFormattedLines: Bool {
         return self.operations.contains { operation in
-            if case .writeLines = operation {
+            switch operation {
+            case .writeLines, .rule:
                 return true
+            default:
+                return false
             }
-            return false
         }
     }
 
@@ -1647,6 +2160,24 @@ fileprivate struct Layout {
         self.brokeLine = false
     }
 
+    /// A rule, `---`, that sets a card apart, unless one stands right above
+    /// with nothing but blank lines between: two cards one below the other
+    /// share the rule between them.
+    mutating func rule() {
+        self.operations.append(.rule)
+        self.settle()
+        if self.occupied {
+            self.commit()
+        }
+        guard self.lines.last(where: { $0.isEmpty == false }) != "---" else {
+            return
+        }
+
+        self.lines.append("---")
+        self.started = true
+        self.brokeLine = false
+    }
+
     /// Writes content laid out on its own, each line of text passed through
     /// `transform`, with the gaps, spaces and line breaks it had at its edges.
     mutating func place(_ content: Content, transform: (String) -> String) {
@@ -1709,6 +2240,8 @@ fileprivate struct Layout {
                 self.lineBreak()
             case .writeLines(let block):
                 self.writeLines(block)
+            case .rule:
+                self.rule()
             }
         }
     }

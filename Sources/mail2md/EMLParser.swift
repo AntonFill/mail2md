@@ -131,9 +131,13 @@ struct EMLParser {
     /// picture is left out of the body, as it always was.
     let imageNames: [String: String]
 
-    init(source: SourceText = .utf8, imageNames: [String: String] = [:]) {
+    /// The Markdown the body is written in.
+    let format: OutputFormat
+
+    init(source: SourceText = .utf8, imageNames: [String: String] = [:], format: OutputFormat = .markdown) {
         self.source = source
         self.imageNames = imageNames
+        self.format = format
     }
 
     func parse(_ raw: String) -> EmailMessage {
@@ -420,7 +424,7 @@ extension EMLParser {
             return decoded
         }
 
-        let converted = HTMLToMarkdown.convert(decoded, imageNames: self.imageNames)
+        let converted = HTMLToMarkdown.convert(decoded, imageNames: self.imageNames, format: self.format)
         images += converted.images
         return converted.markdown
     }

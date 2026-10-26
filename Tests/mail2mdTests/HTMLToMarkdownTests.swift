@@ -954,6 +954,198 @@ struct PictureTests {
 
 // MARK: -
 
+/// A box the mail sets apart, framed on all four sides or on a background of
+/// its own. A card among them, a box of more than one line under a bold first
+/// line, its title, is set apart in the note too: between rules, or as a
+/// callout in Obsidian's format. A box inside a box belongs to it, and the box
+/// holding the mail's last line is its footer, no card (Anton's decision B,
+/// 2026-10-26).
+struct BoxTests {
+
+    /// A card framed on all four sides, as an insurer sets one per person.
+    static let card = """
+        <div>Davor</div><table role="presentation"><tr><td style="border:2px solid #CCCCCC;border-radius:8px;padding:12px 17px">\
+        <div style="font-weight:bold">Jane Doe</div><div>01.01.1990, weiblich</div>\
+        <div>Prämie pro Monat CHF <span style="font-weight:bold">100.00</span></div></td></tr></table><div>Danach</div>
+        """
+
+    @Test func setsACardApartAsACallout() {
+        let expected = "Davor\n\n> [!quote] Jane Doe\n> 01.01.1990, weiblich\n> Prämie pro Monat CHF **100.00**\n\nDanach"
+
+        #expect(HTMLToMarkdown.convert(Self.card, format: .obsidian) == expected)
+    }
+
+    @Test func setsACardApartBetweenRulesInPlainMarkdown() {
+        let expected = "Davor\n\n---\n\n**Jane Doe**\n01.01.1990, weiblich\nPrämie pro Monat CHF **100.00**\n\n---\n\nDanach"
+
+        #expect(HTMLToMarkdown.convert(Self.card) == expected)
+    }
+
+    /// A background of its own sets a box apart however the mail writes it,
+    /// and only a colour that differs from the one around it.
+    @Test(arguments: [
+        "style=\"background-color:#4976BA;border-radius:8px\"",
+        "style=\"background:#eee\"",
+        "style=\"background: url(https://example.com/banner.png) no-repeat #eeeeee\"",
+        "style=\"background-color: rgb(73, 118, 186)\"",
+        "style=\"background-color:#4976BA26\"",
+        "style=\"background:yellow\"",
+        "bgcolor=\"#4976ba\"",
+        "bgcolor=\"4976ba\"",
+    ])
+    func setsABoxOnABackgroundOfItsOwnApart(background: String) {
+        let html = """
+            <div>Davor</div><table role="presentation"><tr><td \(background)>\
+            <div style="font-weight:bold">522.–</div><div>Ersparnis pro Jahr in CHF</div></td></tr></table><div>Danach</div>
+            """
+
+        #expect(HTMLToMarkdown.convert(html, format: .obsidian) == "Davor\n\n> [!quote] 522.–\n> Ersparnis pro Jahr in CHF\n\nDanach")
+    }
+
+    /// What is no card stays as it was: a box without a bold first line, one
+    /// of a single line, a background like the one around it or none, a frame
+    /// open at a side, a box inside a box, the footer, and a marked word.
+    @Test(arguments: [
+        ("<div style=\"background:#eeeeee\"><div>Zeile eins</div><div>Zeile zwei</div></div>", "Zeile eins\nZeile zwei"),
+        ("<div style=\"border:1px solid #cccccc\"><b>Titel</b></div>", "**Titel**"),
+        ("<div style=\"background:#ffffff\"><div style=\"background-color:white\"><b>Titel</b><div>Text</div></div></div>", "**Titel**\nText"),
+        ("<div style=\"background-color:transparent\"><b>Titel</b><div>Text</div></div>", "**Titel**\nText"),
+        ("<div style=\"background-color:rgba(0, 0, 0, 0)\"><b>Titel</b><div>Text</div></div>", "**Titel**\nText"),
+        ("<div style=\"border-top:1px solid #cccccc\"><b>Titel</b><div>Text</div></div>", "**Titel**\nText"),
+        ("<div style=\"border:1px solid #cccccc;border-bottom:none\"><b>Titel</b><div>Text</div></div>", "**Titel**\nText"),
+        ("<div style=\"border:0 solid #cccccc\"><b>Titel</b><div>Text</div></div>", "**Titel**\nText"),
+        ("<div style=\"border:1px solid #cccccc\"><div>Kopf</div><div style=\"background:#eeeeee\"><b>Innen</b><div>Text</div></div></div>", "Kopf\n**Innen**\nText"),
+        ("<div>Ein <span style=\"background:#eeeeee\"><b>Titel</b><br>Text</span></div>", "Ein **Titel**\nText"),
+    ])
+    func leavesWhatIsNoCardAsItWas(box: String, expected: String) {
+        let html = "<div>Davor</div>\(box)<div>Danach</div>"
+
+        #expect(HTMLToMarkdown.convert(html, format: .obsidian) == "Davor\n\(expected)\nDanach")
+    }
+
+    /// The footer of a mail often sits on a colour of its own, a heading
+    /// above the address, and it is no card.
+    @Test func leavesTheBoxHoldingTheLastLineAsItWas() {
+        let html = "<div>Brief</div><div style=\"background:#4976ba;color:#ffffff\"><b>Kontakt</b><div>Adresse</div></div>"
+
+        #expect(HTMLToMarkdown.convert(html, format: .obsidian) == "Brief\n**Kontakt**\nAdresse")
+    }
+
+    /// A mail lays its text on a panel of a colour of its own. The panel
+    /// holding all of it is the page, and a card on it is a card.
+    @Test func takesThePanelHoldingAllTextForThePage() {
+        let html = """
+            <div style="background:#f4f4f4"><div style="background:#ffffff"><div>Hallo</div>\
+            <div style="border:1px solid #cccccc"><b>Karte</b><div>Text</div></div><div>Gruss</div></div></div>
+            """
+
+        #expect(HTMLToMarkdown.convert(html, format: .obsidian) == "Hallo\n\n> [!quote] Karte\n> Text\n\nGruss")
+    }
+
+    /// A browser sets a heading in bold, so a heading opening a box is its
+    /// title.
+    @Test func takesAHeadingForTheTitle() {
+        let html = "<div style=\"border:1px solid #cccccc\"><h3>Buchungsdetails</h3><div>Nummer: 1</div></div><div>Danach</div>"
+
+        #expect(HTMLToMarkdown.convert(html, format: .obsidian) == "> [!quote] Buchungsdetails\n>\n> Nummer: 1\n\nDanach")
+    }
+
+    /// Two cards one below the other share the rule between them.
+    @Test func drawsOneRuleBetweenTwoCards() {
+        let html = """
+            <div>Davor</div><div style="border:1px solid #cccccc"><b>Eins</b><div>Text</div></div>\
+            <div style="height:20px;line-height:20px">&#8202;</div>\
+            <div style="border:1px solid #cccccc"><b>Zwei</b><div>Text</div></div><div>Danach</div>
+            """
+
+        #expect(HTMLToMarkdown.convert(html) == "Davor\n\n---\n\n**Eins**\nText\n\n---\n\n**Zwei**\nText\n\n---\n\nDanach")
+    }
+
+    /// A box of one line in light text on a dark background of its own is a
+    /// button, and a reader sees it at once, so it is bold. A pale bar in dark
+    /// text is not, and neither is a button that is a link, which says so
+    /// itself, or a dark box of more lines.
+    @Test(arguments: [
+        ("<td style=\"background:#757575\"><div style=\"color:#FFFFFF\">Kein Wechsel gewünscht</div></td>", "**Kein Wechsel gewünscht**"),
+        ("<td style=\"background-color: rgb(15, 69, 39)\"><div style=\"color:white\">Bestätigt</div></td>", "**Bestätigt**"),
+        ("<td bgcolor=\"#0f4527\"><font color=\"#ffffff\">Bestätigt</font></td>", "**Bestätigt**"),
+        ("<td style=\"background:#0f4527;color:#fff\">Prämie CHF <b>100</b></td>", "**Prämie CHF 100**"),
+        ("<td style=\"background:#E5E5E5\"><div style=\"color:#333333\">Keine Ersparnis</div></td>", "Keine Ersparnis"),
+        ("<td style=\"background:#dff8ea\"><div style=\"color:#0f4527\">Ersparnis CHF <span style=\"font-weight:bold\">10.00</span></div></td>", "Ersparnis CHF **10.00**"),
+        ("<td style=\"background:#0f4527\"><a href=\"https://example.com\" style=\"color:#ffffff\">Ansehen</a></td>", "[Ansehen](https://example.com)"),
+        ("<td style=\"background:#0f4527;color:#ffffff\"><div>Zeile eins</div><div>Zeile zwei</div></td>", "Zeile eins\nZeile zwei"),
+    ])
+    func boldsAButtonInLightTextOnADarkBackground(cell: String, expected: String) {
+        let html = "<div>Davor</div><table role=\"presentation\"><tr>\(cell)</tr></table><div>Danach</div>"
+
+        #expect(HTMLToMarkdown.convert(html) == "Davor\n\(expected)\nDanach")
+    }
+}
+
+// MARK: -
+
+/// Columns MJML sets side by side. A browser shows them next to each other
+/// once the window is wide enough, and only the class names say so, because
+/// the widths stand in a stylesheet. Where each column holds as many lines as
+/// the others, the lines pair up as in a table.
+struct ColumnTests {
+
+    /// A column in the shape MJML writes it, `mj-column-per-49` for 49 %.
+    static func column(_ percent: String, _ content: String) -> String {
+        return "<div class=\"mj-column-per-\(percent) mj-outlook-group-fix\" style=\"font-size:0px;display:inline-block;vertical-align:top;width:100%;\">\(content)</div>"
+    }
+
+    /// Columns in the section MJML lays them out in, between Outlook's
+    /// conditional comments.
+    static func section(_ columns: [String]) -> String {
+        let cells = columns.joined(separator: "<!--[if mso | IE]></td><td style=\"vertical-align:top;\"><![endif]-->")
+        return """
+            <div>Davor</div><table role="presentation"><tr><td style="font-size:0px;padding:0px;text-align:center;">\
+            <!--[if mso | IE]><table role="presentation"><tr><td style="vertical-align:top;"><![endif]-->\(cells)\
+            <!--[if mso | IE]></td></tr></table><![endif]--></td></tr></table><div>Danach</div>
+            """
+    }
+
+    @Test func pairsColumnsOfAsManyLinesAsATable() {
+        let left = Self.column("49", """
+            <table role="presentation" style="background-color:#f5f5f5"><tr><td style="padding-top:4px"><div style="font-weight:bold"><span>Bisher:</span></div></td></tr>\
+            <tr><td style="padding:8px"><div><span>Kasse A</span><br>Hausarzt</div></td></tr></table>
+            """)
+        let spacer = Self.column("2", "<table role=\"presentation\"><tbody></tbody></table>")
+        let right = Self.column("49", """
+            <table role="presentation" style="background-color:#4976BA26"><tr><td style="padding-top:4px"><div style="font-weight:bold"><span>Neu:</span></div></td></tr>\
+            <tr><td style="padding:8px"><div><span>Kasse B</span><br>Telmed</div></td></tr></table>
+            """)
+
+        #expect(HTMLToMarkdown.convert(Self.section([left, spacer, right])) == "Davor\n\n| Bisher: | Neu: |\n|---|---|\n| Kasse A | Kasse B |\n| Hausarzt | Telmed |\n\nDanach")
+    }
+
+    /// Without a bold first line in every column there is no header to take,
+    /// and Markdown's table gets an empty one, as a table of data does.
+    @Test func writesAnEmptyHeaderOverColumnsWithoutATitleEach() {
+        let left = Self.column("35", "<div><b>Eins</b></div><div>Zwei</div>")
+        let right = Self.column("65", "<div>Drei</div><div>Vier | Fünf</div>")
+
+        #expect(HTMLToMarkdown.convert(Self.section([left, right])) == "Davor\n\n|  |  |\n|---|---|\n| **Eins** | Drei |\n| Zwei | Vier \\| Fünf |\n\nDanach")
+    }
+
+    /// Columns of different lengths, columns of one line, and columns that
+    /// each take the whole width stand one below the other, as before.
+    @Test(arguments: [
+        (["49", "49"], ["<div>Eins</div><div>Zwei</div>", "<div>Drei</div>"], "Eins\nZwei\nDrei"),
+        (["49", "49"], ["<div>Eins</div>", "<div>Zwei</div>"], "Eins\nZwei"),
+        (["100", "100"], ["<div>Eins</div><div>Zwei</div>", "<div>Drei</div><div>Vier</div>"], "Eins\nZwei\nDrei\nVier"),
+        (["60", "60"], ["<div>Eins</div><div>Zwei</div>", "<div>Drei</div><div>Vier</div>"], "Eins\nZwei\nDrei\nVier"),
+    ])
+    func stacksColumnsThatDoNotPairUp(percents: [String], contents: [String], expected: String) {
+        let html = Self.section(zip(percents, contents).map { Self.column($0, $1) })
+
+        #expect(HTMLToMarkdown.convert(html) == "Davor\n\(expected)\nDanach")
+    }
+}
+
+// MARK: -
+
 /// One constructed snippet per sender stack, each in the shape the stack
 /// really sends and with the whole expected note. Under Q1's option B every
 /// one of them runs through the emitter, not only the newsletters.
@@ -1159,5 +1351,172 @@ struct SenderStackTests {
             """
 
         #expect(HTMLToMarkdown.convert(html) == expected)
+    }
+
+    /// An insurer's confirmation, built with MJML: a banner, one card per
+    /// person with the old and the new insurance in two columns, a bar with
+    /// the saving, the premium in large bold figures and a status button, the
+    /// footer on the company's colour. The weights stand in the style, never
+    /// in a `b`. The expected note takes the form Anton corrected the note of
+    /// 1.4.0 to by hand on 2026-10-25.
+    @Test func mjml() {
+        let font = "font-family:Source Sans Pro, Helvetica, Arial, sans-serif;"
+        func section(_ content: String, style: String = "padding:0px;") -> String {
+            return """
+                <div style="background:#ffffff;background-color:#ffffff;margin:0px auto;max-width:512px;">\
+                <table align="center" border="0" cellpadding="0" cellspacing="0" role="presentation" style="background:#ffffff;background-color:#ffffff;width:100%;">\
+                <tbody><tr><td style="direction:ltr;font-size:0px;\(style)text-align:center;">\(content)</td></tr></tbody></table></div>
+                """
+        }
+        func column(_ percent: String, _ content: String) -> String {
+            return "<div class=\"mj-column-per-\(percent) mj-outlook-group-fix\" style=\"font-size:0px;text-align:left;direction:ltr;display:inline-block;vertical-align:top;width:100%;\">\(content)</div>"
+        }
+        func bar(_ background: String, _ color: String, _ size: String, _ content: String, padding: String) -> String {
+            return column("100", """
+                <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tbody><tr><td style="vertical-align:top;\(padding)">\
+                <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tbody><tr>\
+                <td align="center" style="background:\(background);font-size:0px;padding:0px 8px;padding-top:8px;padding-bottom:8px;word-break:break-word;">\
+                <div style="\(font)font-size:\(size);line-height:20px;text-align:center;color:\(color);">\(content)</div></td></tr></tbody></table></td></tr></tbody></table>
+                """)
+        }
+        func premium(_ amount: String) -> String {
+            return column("100", """
+                <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tbody><tr><td style="vertical-align:top;padding-top:8px;">\
+                <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tbody><tr>\
+                <td align="center" style="font-size:0px;padding:0px 8px;padding-top:16px;word-break:break-word;">\
+                <div style="\(font)font-size:14px;line-height:20px;text-align:center;color:#7F7F7F;"><span>Prämie pro Monat CHF</span>
+                <span style="font-size:28px;font-weight:bold;color:#333333"> \(amount)</span></div></td></tr></tbody></table></td></tr></tbody></table>
+                """)
+        }
+        func insurance(_ heading: String, _ background: String, _ insurer: String, _ model: String) -> String {
+            return column("49", """
+                <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="background-color:\(background);vertical-align:top;" width="100%"><tbody>\
+                <tr><td align="left" style="font-size:0px;padding:0px 8px;padding-top:4px;word-break:break-word;">\
+                <div style="\(font)font-size:14px;font-weight:bold;line-height:20px;text-align:left;color:#333333;"><span>\(heading)</span></div></td></tr>\
+                <tr><td align="left" style="font-size:0px;padding:8px;word-break:break-word;">\
+                <div style="\(font)font-size:16px;line-height:20px;text-align:left;color:#333333;"><span>\(insurer)</span><br>\(model)</div></td></tr>\
+                <tr><td align="left" style="font-size:0px;padding:0px 8px;padding-bottom:8px;word-break:break-word;">\
+                <div style="\(font)font-size:14px;line-height:20px;text-align:left;color:#333333;"><span><span>Franchise: CHF 300.–</span><br>\
+                <span>Unfalldeckung: Ja</span></span></div></td></tr></tbody></table>
+                """)
+        }
+        func card(_ name: String, _ born: String, _ body: String) -> String {
+            let person = column("100", """
+                <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tbody>\
+                <tr><td align="left" style="font-size:0px;padding:0;word-break:break-word;">\
+                <div style="\(font)font-size:16px;font-weight:bold;line-height:24px;text-align:left;color:#333333;">\(name)</div></td></tr>\
+                <tr><td align="left" style="font-size:0px;padding:0;word-break:break-word;">\
+                <div style="\(font)font-size:14px;line-height:20px;text-align:left;color:#333333;"><span>\(born), </span>
+                <span>Weiblich</span></div></td></tr></tbody></table>
+                """)
+            return """
+                <div style="background:#FFFFFF;background-color:#FFFFFF;margin:0px auto;max-width:550px;border-radius:8px;overflow:hidden;">\
+                <table align="center" border="0" cellpadding="0" cellspacing="0" role="presentation" style="background:#FFFFFF;background-color:#FFFFFF;width:100%;border-collapse:separate;">\
+                <tbody><tr><td style="border:2px solid #CCCCCC;border-radius:8px;direction:ltr;font-size:0px;padding:12px 17px;text-align:center;">\
+                \(section(person, style: "padding:0px;padding-bottom:12px;"))\(body)</td></tr></tbody></table></div>
+                """
+        }
+        let banner = column("100", """
+            <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%" style="border-collapse:separate;"><tbody><tr>\
+            <td style="background-color:#4976BA;border-radius:8px;vertical-align:top;border-collapse:separate;padding-top:8px;padding-bottom:8px;">\
+            <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tbody>\
+            <tr><td align="center" style="font-size:0px;padding:0px 8px;padding-bottom:0px;word-break:break-word;">\
+            <div style="\(font)font-size:28px;font-weight:bold;line-height:32px;text-align:center;color:#ffffff;">300.–</div></td></tr>\
+            <tr><td align="center" style="font-size:0px;padding:0px 8px;padding-top:0px;word-break:break-word;">\
+            <div style="\(font)font-size:20px;line-height:30px;text-align:center;color:#ffffff;">Totale Ersparnis pro Jahr in CHF</div></td></tr>\
+            </tbody></table></td></tr></tbody></table>
+            """)
+        let spacing = "padding:0px;padding-top:8px;"
+        let first = card("Jane Doe", "01.01.1990",
+            section(insurance("Bisher:", "#f5f5f5", "Kasse A", "Hausarztmodell") + column("2", "<table border=\"0\" role=\"presentation\"><tbody></tbody></table>") + insurance("Neu für 2027:", "#4976BA26", "Kasse B", "Telmed"))
+            + section(
+                bar("#dff8ea", "#0f4527", "16px", "<span style=\"font-size:14px\">Ersparnis pro Jahr CHF</span>\n<span style=\"font-size:20px;font-weight:bold\">300.00</span>", padding: "padding:0px;")
+                + premium("250.00")
+                + bar("#0f4527", "#ffffff", "20px", "<span>Versicherung wechselt für Sie</span>", padding: "padding:0px;padding-top:18px;"),
+                style: spacing
+            )
+        )
+        let second = card("Mia Doe", "02.02.2010",
+            section(column("100", """
+                <div style="\(font)font-size:16px;line-height:20px;text-align:left;color:#333333;"><span>Kasse C – Hausarztmodell</span></div>\
+                <div style="\(font)font-size:14px;line-height:20px;text-align:left;color:#333333;"><ul style="padding:4px 0;margin:0;list-style:none">\
+                <li><span>Franchise: CHF 0.–</span></li><li><span>Unfalldeckung: Nein</span></li></ul></div>
+                """))
+            + section(
+                bar("#E5E5E5", "#333333", "16px", "<span>Keine Ersparnis</span>", padding: "padding:0px;")
+                + premium("100.00")
+                + bar("#757575", "#FFFFFF", "20px", "<span>Kein Wechsel gewünscht</span>", padding: "padding:0px;padding-top:18px;"),
+                style: spacing
+            )
+        )
+        let spacer = "<div style=\"height:32px;line-height:32px;\">&#8202;</div>"
+        let html = """
+            <!doctype html><html><head><style type="text/css">@media only screen and (min-width:480px) { .mj-column-per-49 { width:49%!important; } }</style></head>\
+            <body style="word-spacing:normal;background-color:#ffffff;">\
+            <div style="display:none;font-size:1px;color:#ffffff;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">Es freut uns</div>\
+            <div role="article" style="word-spacing:normal;background-color:#ffffff;">\
+            <div style="\(font)font-size:16px;line-height:20px;text-align:left;color:#354052;"><p style="margin-top: 0px; margin-bottom: 12px;">Sehr geehrte Frau Doe</p></div>\
+            <div style="height:40px;line-height:40px;">&#8202;</div>\
+            \(section(banner, style: spacing))\(spacer)\(first)\(spacer)\(second)\(spacer)\
+            <div style="\(font)font-size:16px;line-height:24px;text-align:left;color:#333333;"><strong>Umweltabgabe</strong><br>\
+            <span>Die Umweltabgabe von <strong>CHF 4.75</strong> ist abgezogen.</span></div>\
+            <div style="height:20px;line-height:20px;">&#8202;</div>\
+            <div style="\(font)font-size:16px;line-height:20px;text-align:left;color:#354052;">\
+            <p style="margin-top: 0px; margin-bottom: 12px; font-style: italic;">Alternativ mit Ihrem persönlichen Code abrufen.</p>\
+            <p style="margin-top: 0px; margin-bottom: 12px;">Freundliche Grüsse<br>Ihre Versicherung</p></div>\
+            <div style="background:#4976ba;background-color:#4976ba;margin:0px auto;max-width:600px;">\
+            <div style="\(font)font-size:16px;line-height:28px;text-align:center;color:#ffffff;">Versicherung AG, Musterstrasse 1, 8000 Zürich<br>\
+            <a href="https://www.example.com" style="text-decoration: none; color: #ffffff; font-weight: 700;">example.com</a> | \
+            <a href="https://example.com/datenschutz" style="text-decoration: none; color: #ffffff; font-weight: 700;">Datenschutz</a></div></div>\
+            </div></body></html>
+            """
+        let expected = """
+            Sehr geehrte Frau Doe
+
+            > [!quote] 300.–
+            > Totale Ersparnis pro Jahr in CHF
+
+            > [!quote] Jane Doe
+            > 01.01.1990, Weiblich
+            >
+            > | Bisher: | Neu für 2027: |
+            > |---|---|
+            > | Kasse A | Kasse B |
+            > | Hausarztmodell | Telmed |
+            > | Franchise: CHF 300.– | Franchise: CHF 300.– |
+            > | Unfalldeckung: Ja | Unfalldeckung: Ja |
+            >
+            > Ersparnis pro Jahr CHF **300.00**
+            >
+            > Prämie pro Monat CHF **250.00**
+            >
+            > **Versicherung wechselt für Sie**
+
+            > [!quote] Mia Doe
+            > 02.02.2010, Weiblich
+            >
+            > Kasse C – Hausarztmodell
+            >
+            > Franchise: CHF 0.–
+            > Unfalldeckung: Nein
+            >
+            > Keine Ersparnis
+            >
+            > Prämie pro Monat CHF **100.00**
+            >
+            > **Kein Wechsel gewünscht**
+
+            **Umweltabgabe**
+            Die Umweltabgabe von **CHF 4.75** ist abgezogen.
+            *Alternativ mit Ihrem persönlichen Code abrufen.*
+
+            Freundliche Grüsse
+            Ihre Versicherung
+
+            Versicherung AG, Musterstrasse 1, 8000 Zürich
+            **[example.com](https://www.example.com)** | **[Datenschutz](https://example.com/datenschutz)**
+            """
+
+        #expect(HTMLToMarkdown.convert(html, format: .obsidian) == expected)
     }
 }

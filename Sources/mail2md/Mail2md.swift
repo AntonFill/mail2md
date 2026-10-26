@@ -22,6 +22,7 @@ struct Mail2md: Equatable {
     var attachmentsDir: String? = nil
     var attachmentName: String? = nil
     var inlineImages = false
+    var format = OutputFormat.markdown
     var path: String
 
     /// A planned extraction: which parts go where, and under which names.
@@ -43,7 +44,8 @@ struct Mail2md: Equatable {
     }
 
     func run() throws {
-        let (parser, raw) = try self.read()
+        let (reader, raw) = try self.read()
+        let parser = EMLParser(source: reader.source, format: self.format)
         let reading = parser.parse(raw)
 
         // An empty `created` is silent data loss in the vault: warn unconditionally
@@ -60,7 +62,7 @@ struct Mail2md: Equatable {
         // once more with those names.
         let extraction = try self.planExtraction(from: raw, parser: parser, message: reading)
         let imageNames = extraction?.imageNames ?? [:]
-        let message = imageNames.isEmpty ? reading : EMLParser(source: parser.source, imageNames: imageNames).parse(raw)
+        let message = imageNames.isEmpty ? reading : EMLParser(source: parser.source, imageNames: imageNames, format: self.format).parse(raw)
         let noted = extraction.map { message.replacingAttachments(with: $0.attachments) } ?? message
 
         // Removing characters changes what the note says, and what was kept may
@@ -386,6 +388,7 @@ extension Mail2md {
         .value("attachments-dir"),
         .value("attachment-name"),
         .flag("inline-images"),
+        .value("format"),
         .flag("version"),
         .flag("help", short: "h"),
     ])
@@ -418,6 +421,11 @@ extension Mail2md {
             throw UsageError(description: "unexpected argument '\(parsed.operands[1])'")
         }
 
+        let name = parsed.value(of: "format") ?? OutputFormat.markdown.rawValue
+        guard let format = OutputFormat(rawValue: name) else {
+            throw UsageError(description: "--format takes markdown or obsidian, not '\(name)'")
+        }
+
         let command = Mail2md(
             output: parsed.value(of: "output"),
             verbose: parsed.isSet("verbose"),
@@ -426,6 +434,7 @@ extension Mail2md {
             attachmentsDir: parsed.value(of: "attachments-dir"),
             attachmentName: parsed.value(of: "attachment-name"),
             inlineImages: parsed.isSet("inline-images"),
+            format: format,
             path: path
         )
 
@@ -440,7 +449,7 @@ extension Mail2md {
 extension Mail2md {
 
     /// The command line in brief, shared by the help and the usage error.
-    static let synopsis = "mail2md [--output <output>] [--verbose] [--force] [--extract-attachments] [--attachments-dir <attachments-dir>] [--attachment-name <attachment-name>] [--inline-images] <path>"
+    static let synopsis = "mail2md [--output <output>] [--verbose] [--force] [--extract-attachments] [--attachments-dir <attachments-dir>] [--attachment-name <attachment-name>] [--inline-images] [--format <format>] <path>"
 
     /// What follows a usage error, the way `rm` and `cp` print theirs.
     static let usage = """
@@ -465,6 +474,7 @@ extension Mail2md {
                 HelpPage.Entry("--attachments-dir <attachments-dir>", "Directory for extracted attachments; implies --extract-attachments. Defaults next to the output, and is needed when the output is standard output."),
                 HelpPage.Entry("--attachment-name <attachment-name>", "Rename extracted attachments after a pattern, e.g. \"{date} {time} ENCL {name}\"; placeholders are {name}, {ext}, {date} and {time}, the latter two with an optional format ({date:yyyy.MM.dd}). Implies --extract-attachments."),
                 HelpPage.Entry("--inline-images", "Write the pictures the mail shows from its own parts (cid:) as files too, and embed each where it stands. Implies --extract-attachments."),
+                HelpPage.Entry("--format <format>", "The Markdown to write: markdown, which any reader shows, or obsidian, which sets a card the mail draws apart as a callout instead of between rules. (default: markdown)"),
                 HelpPage.Entry("--version", "Show the version."),
                 HelpPage.Entry("-h, --help", "Show help information."),
             ]),

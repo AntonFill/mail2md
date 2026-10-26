@@ -16,6 +16,7 @@ mail2md Mail.eml --extract-attachments   # also write attachment files alongside
 mail2md Mail.eml --attachments-dir ./att # write attachments into ./att (implies extraction)
 mail2md Mail.eml --attachment-name "{date} {time} ENCL {name}"   # rename them as they are written
 mail2md Mail.eml --inline-images         # also write the pictures the mail shows and embed them in place
+mail2md Mail.eml --format obsidian       # write the cards a mail sets apart as Obsidian callouts
 mail2md Mail.eml --verbose               # report what was parsed and written
 mail2md Mail.eml -o -                    # write the note to stdout instead of a file
 cat Mail.eml | mail2md -                 # read the mail from stdin, write the note to stdout
@@ -111,6 +112,26 @@ The alt text becomes the embed's alias where it says something about the picture
 
 A picture Apple Mail places in the middle of a message arrives as a part of its own, between two pieces of text. That one counts as an attachment, listed and extracted like a document placed there.
 
+## Cards
+
+Some mails set their content apart in boxes: a card per person, a summary under a heading, a banner with a total. A box framed on all four sides or on a colour of its own, more than one line long and headed by a line all in bold, stands in the note between two rules, which any Markdown shows. With `--format obsidian` it becomes a callout instead, its bold line the title:
+
+```markdown
+> [!quote] Jane Doe
+> 01.01.1990, female
+>
+> | Before: | New for 2027: |
+> |---|---|
+> | Insurer A | Insurer B |
+> | Family doctor | Telemedicine |
+>
+> Premium per month CHF **250.00**
+>
+> **Change confirmed**
+```
+
+Only the outermost box is a card, never one inside another, and never the box holding the mail's last line, which is its footer. Inside, a one-line box in light text on a dark colour is a button and is set in bold, and columns that MJML sets side by side pair up as a table where each holds as many lines as the others.
+
 ## Pipes
 
 `-` as the path reads the mail from stdin, and the note then goes to stdout. `-o -` sends it there for a mail read from a file too, so a script or an agent can read a mail as Markdown without a file being left behind.
@@ -141,7 +162,7 @@ It is also built to be fast and unremarkable to use. Across 716 real mails the m
 
 Parses single-part, `multipart/alternative` (reads the last form it can show, as RFC 2046 orders them, so the HTML one where there is one, and the plain one when the HTML shows nothing) and `multipart/mixed` messages, decodes quoted-printable and base64 transfer encodings, and decodes RFC 2047 encoded-word headers. Each address in `from`, `to` and `cc` is written as `Name <address>`, or as the bare address where the name only repeats it, with quotes only around a name whose comma would otherwise split the list. In a `multipart/mixed` message every inline text part is read in order, so text that continues after an attachment placed mid-message is kept, and an attached text file never stands in for the body. Converts HTML to Markdown, lists attachment filenames in the frontmatter, and optionally extracts attachment files to disk under a naming scheme of your choosing, linking them from the note (S/MIME signature parts are excluded; extracted filenames are sanitised, so a crafted header cannot write outside the target directory).
 
-HTML is laid out the way a browser shows it: a table of data becomes a Markdown table, a table used for layout becomes lines of text, an element the mail hides in its own style stays out (the preview text a newsletter tucks in front of its content), and preformatted text becomes a code block.
+HTML is laid out the way a browser shows it: a table of data becomes a Markdown table, a table used for layout becomes lines of text, an element the mail hides in its own style stays out (the preview text a newsletter tucks in front of its content), and preformatted text becomes a code block. Bold and italics count where the style sets them as much as where a `b` or an `i` does, a list whose style hides its bullets is a stack of lines, and a card the mail sets apart stays apart (see Cards).
 
 Invisible characters that never belong in running text are removed: the zero-width fillers behind that preview text, Unicode tag characters outside a flag, a stray zero-width space or byte order mark. Those that can belong there but also change how text reads, a zero-width joiner outside an emoji, direction marks and bidi controls, stay and are counted. Either way one line on stderr says what was found, so text a reader cannot see does not reach a vault, or a language model reading it, unnoticed.
 

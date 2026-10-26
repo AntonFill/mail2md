@@ -140,6 +140,22 @@ struct Mail2mdTests {
         #expect(FileManager.default.fileExists(atPath: attachments.path) == false)
     }
 
+    /// A card the mail sets apart stands between rules in the note, and as a
+    /// callout where `--format obsidian` asks for Obsidian's Markdown.
+    @Test func setsACardApartAsTheFormatAsksFor() throws {
+        let command = try CommandRunner()
+        defer { command.removeWorkspace() }
+        let input = try command.write(cardEML, named: "karte.eml")
+
+        let markdown = try command.run(["-o", "-", input.path])
+        let obsidian = try command.run(["--format", "obsidian", "-o", "-", input.path])
+
+        #expect(markdown.exitCode == 0)
+        #expect(markdown.standardOutput.hasSuffix("---\n\nDavor\n\n---\n\n**Jane Doe**\nBetrag: CHF 100\n\n---\n\nDanach\n"))
+        #expect(obsidian.exitCode == 0)
+        #expect(obsidian.standardOutput.hasSuffix("---\n\nDavor\n\n> [!quote] Jane Doe\n> Betrag: CHF 100\n\nDanach\n"))
+    }
+
     // MARK: - Inline images
 
     /// A picture the note leaves out is named on stderr with the size it is
@@ -562,10 +578,23 @@ struct InvocationTests {
     }
 
     @Test func readsEveryOptionBeforeOrAfterThePath() throws {
-        let expected = Mail2md(output: "note.md", verbose: true, force: true, extractAttachments: true, attachmentsDir: "files", attachmentName: "ENCL {name}", inlineImages: true, path: "mail.eml")
+        let expected = Mail2md(output: "note.md", verbose: true, force: true, extractAttachments: true, attachmentsDir: "files", attachmentName: "ENCL {name}", inlineImages: true, format: .obsidian, path: "mail.eml")
 
-        #expect(try Mail2md.invocation(from: ["-vf", "-o", "note.md", "--extract-attachments", "--attachments-dir", "files", "--attachment-name", "ENCL {name}", "--inline-images", "mail.eml"]) == .run(expected))
-        #expect(try Mail2md.invocation(from: ["mail.eml", "--output=note.md", "--verbose", "--force", "--extract-attachments", "--attachments-dir=files", "--attachment-name=ENCL {name}", "--inline-images"]) == .run(expected))
+        #expect(try Mail2md.invocation(from: ["-vf", "-o", "note.md", "--extract-attachments", "--attachments-dir", "files", "--attachment-name", "ENCL {name}", "--inline-images", "--format", "obsidian", "mail.eml"]) == .run(expected))
+        #expect(try Mail2md.invocation(from: ["mail.eml", "--output=note.md", "--verbose", "--force", "--extract-attachments", "--attachments-dir=files", "--attachment-name=ENCL {name}", "--inline-images", "--format=obsidian"]) == .run(expected))
+    }
+
+    /// Plain Markdown unless the line asks for Obsidian's.
+    @Test func writesMarkdownUnlessTheFormatSaysOtherwise() throws {
+        #expect(Mail2md(path: "mail.eml").format == .markdown)
+        #expect(try Mail2md.invocation(from: ["--format", "markdown", "mail.eml"]) == .run(Mail2md(path: "mail.eml")))
+        #expect(try Mail2md.invocation(from: ["--format", "obsidian", "mail.eml"]) == .run(Mail2md(format: .obsidian, path: "mail.eml")))
+    }
+
+    @Test func refusesAFormatItDoesNotKnow() throws {
+        #expect(throws: Mail2md.UsageError(description: "--format takes markdown or obsidian, not 'html'")) {
+            try Mail2md.invocation(from: ["mail.eml", "--format", "html"])
+        }
     }
 
     @Test func takesTheOutputAttachedToItsShortForm() throws {
@@ -648,6 +677,21 @@ struct InvocationTests {
 }
 
 // MARK: -
+
+/// An HTML mail with a card framed on all four sides, a name in bold above an
+/// amount, between two lines of text. Local to this suite, like the fixture
+/// below, because the emitter's suites build their cards from HTML alone.
+private let cardEML = """
+    From: Versicherung <info@example.com>\r
+    To: Jane Doe <jane@example.com>\r
+    Subject: Bestaetigung\r
+    Date: Sun, 25 Oct 2026 22:07:00 +0100\r
+    MIME-Version: 1.0\r
+    Content-Type: text/html; charset=utf-8\r
+    \r
+    <html><body><div>Davor</div><div style="border:2px solid #cccccc"><div style="font-weight:bold">Jane Doe</div>\r
+    <div>Betrag: CHF 100</div></div><div>Danach</div></body></html>\r
+    """
 
 /// A `Date` header no parser can read, for the warning path of the command.
 /// Local to this suite rather than shared in `EMLFixtures.swift`, because only
