@@ -144,6 +144,24 @@ struct HTMLToMarkdownTests {
     func escapesTheBracketsInALinksText(html: String, expected: String) {
         #expect(HTMLToMarkdown.convert(html) == expected)
     }
+
+    /// A target Markdown would not read as one stands in pointy brackets: one
+    /// with a space, which ends a link, as in the map links and footers of a
+    /// parcel service (102 targets in 6 of 648 archive mails, 2026-10-26), one
+    /// with a parenthesis without its partner, or one that opens with `<`.
+    /// A tab or a line break in a target the browser takes out, and so does
+    /// the emitter.
+    @Test(arguments: [
+        ("<a href=\"https://example.com/maps?query=MUSTERSTRASSE 1+8000+ZUERICH\">Karte</a>", "[Karte](<https://example.com/maps?query=MUSTERSTRASSE 1+8000+ZUERICH>)"),
+        ("<a href=\"mailto: service@example.com?subject=Mein Abo\">Abo</a>", "[Abo](<mailto: service@example.com?subject=Mein Abo>)"),
+        ("<a href=\"https://example.com/a_(b\">Wiki</a>", "[Wiki](<https://example.com/a_(b>)"),
+        ("<a href=\"https://example.com/a <b>\">Spitz</a>", "[Spitz](<https://example.com/a \\<b\\>>)"),
+        ("<a href=\"https://example.com/lang\n\t/weg\">Umbruch</a>", "[Umbruch](https://example.com/lang/weg)"),
+        ("<a href=\"https://example.com/a_(b)\">Wiki</a>", "[Wiki](https://example.com/a_(b))"),
+    ])
+    func writesATargetMarkdownReadsAsOne(html: String, expected: String) {
+        #expect(HTMLToMarkdown.convert(html) == expected)
+    }
 }
 
 // MARK: -

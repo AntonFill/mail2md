@@ -1028,8 +1028,49 @@ extension HTMLToMarkdown {
         }
 
         layout.place(content.onOneLine) { line in
-            return "[\(self.escapingBrackets(line))](\(href))"
+            return "[\(self.escapingBrackets(line))](\(self.destination(href)))"
         }
+    }
+
+    /// A link's target as Markdown reads it: as it stands, or in pointy
+    /// brackets where Markdown would not read it so. A space ends a target, a
+    /// parenthesis without its partner ends it early or never, and a `<` at
+    /// its start opens the bracketed form. Between the brackets only a line
+    /// break could end it, and the target holds none (`target(of:)`), so `<`,
+    /// `>` and a backslash are escaped there and nothing else. Until 1.5.0 the
+    /// map links and footers of a parcel service, with a space in the query,
+    /// showed as text (102 targets in 6 of 648 archive mails, 2026-10-26).
+    fileprivate static func destination(_ target: String) -> String {
+        let breaks = target.unicodeScalars.contains { $0 == " " || $0.value < 0x20 || $0.value == 0x7F }
+        guard
+            breaks == false,
+            self.pairsItsParentheses(target),
+            target.hasPrefix("<") == false
+        else {
+            let escaped = target
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "<", with: "\\<")
+                .replacingOccurrences(of: ">", with: "\\>")
+            return "<\(escaped)>"
+        }
+        return target
+    }
+
+    /// Whether every parenthesis in a text closes one before it.
+    fileprivate static func pairsItsParentheses(_ text: String) -> Bool {
+        var depth = 0
+        for character in text {
+            if character == "(" {
+                depth += 1
+            }
+            else if character == ")" {
+                guard depth > 0 else {
+                    return false
+                }
+                depth -= 1
+            }
+        }
+        return depth == 0
     }
 
     /// A picture of an emoji is written as the emoji: Outlook sends an emoji
@@ -1726,8 +1767,16 @@ extension HTMLToMarkdown {
         }
     }
 
+    /// A link's target as a browser reads it: without the whitespace at its
+    /// ends, and without the tabs and line breaks the URL standard takes out
+    /// of it wherever they stand.
     fileprivate static func target(of link: Element) -> String {
-        return ((try? link.attr("href")) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let href = ((try? link.attr("href")) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let scalars = href.unicodeScalars
+        guard scalars.contains(where: { $0 == "\t" || $0 == "\n" || $0 == "\r" }) else {
+            return href
+        }
+        return String(String.UnicodeScalarView(scalars.filter { $0 != "\t" && $0 != "\n" && $0 != "\r" }))
     }
 
     /// Link text with its square brackets escaped: a bracket would end the
