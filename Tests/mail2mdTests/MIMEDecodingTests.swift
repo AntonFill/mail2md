@@ -270,8 +270,18 @@ struct AddressListTests {
         #expect(normalizeAddressList(header) == "Jana Müller | Muster AG <jana@example.com>")
     }
 
-    @Test func keepsTheQuotesOfANameMadeOfTwoQuotedStrings() {
-        #expect(normalizeAddressList("\"Muster\" \"AG\" <info@example.com>") == "\"Muster\" \"AG\" <info@example.com>")
+    /// A name is a phrase of words, any of them quoted on its own (RFC 5322).
+    /// Until 1.5.0 only a name quoted as a whole lost its quotes.
+    @Test func readsANameQuotedWordByWord() {
+        #expect(normalizeAddressList("\"Muster\" \"AG\" <info@example.com>") == "Muster AG <info@example.com>")
+        #expect(normalizeAddressList("Muster  \"AG\" <info@example.com>") == "Muster AG <info@example.com>")
+        #expect(normalizeAddressList("\"Muster, Jana\" \"(extern)\" <jana@example.com>") == "\"Muster, Jana (extern)\" <jana@example.com>")
+        #expect(normalizeAddressList("\"Muster\"\"AG\" <info@example.com>") == "MusterAG <info@example.com>")
+    }
+
+    /// A quote that does not close leaves the name as it stands.
+    @Test func keepsANameWithAQuoteThatDoesNotClose() {
+        #expect(normalizeAddressList("\"Muster\" \"AG <info@example.com>") == "\"Muster\" \"AG <info@example.com>")
     }
 
     @Test func unescapesAQuotedName() {

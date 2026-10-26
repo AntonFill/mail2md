@@ -596,32 +596,54 @@ private func displayName(_ raw: String) -> String {
     return String(name.dropFirst().dropLast())
 }
 
-/// The text of a quoted string with its backslash escapes resolved, if the
-/// text is one quoted string; any other text, `"Muster" "AG"` among them, as
-/// it is.
+/// A name as the words it is made of (RFC 5322's phrase): each quoted string
+/// as its text, its backslash escapes resolved, and one space where space
+/// stood between two words, so `"Muster" "AG"` is `Muster AG`. A name without
+/// quotes, or with a quote that does not close, stays as it is. Until 1.5.0
+/// only a name quoted as a whole lost its quotes.
 private func unquoted(_ text: String) -> String {
-    guard
-        text.count >= 2,
-        text.hasPrefix("\""),
-        text.hasSuffix("\"")
-    else {
+    guard text.contains("\"") else {
         return text
     }
 
     var result = ""
+    var isQuoted = false
     var isEscaped = false
-    for character in text.dropFirst().dropLast() {
-        if isEscaped {
-            isEscaped = false
-        }
-        else if character == "\\" {
-            isEscaped = true
+    var followsSpace = false
+    for character in text {
+        if isQuoted {
+            if isEscaped {
+                isEscaped = false
+            }
+            else if character == "\\" {
+                isEscaped = true
+                continue
+            }
+            else if character == "\"" {
+                isQuoted = false
+                continue
+            }
+            result.append(character)
             continue
         }
-        else if character == "\"" {
-            return text
+
+        if character == " " || character == "\t" {
+            followsSpace = true
+            continue
+        }
+        if followsSpace, result.isEmpty == false {
+            result.append(" ")
+        }
+        followsSpace = false
+        if character == "\"" {
+            isQuoted = true
+            continue
         }
         result.append(character)
+    }
+
+    guard isQuoted == false else {
+        return text
     }
     return result
 }
